@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A workspace for documents and videos",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["name", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ProjectMember": {
+       "title": "ProjectMember",
+       "description": "A user that is a member of a project",
+       "type": "object",
+       "properties": {
+          "role": { "type": "string", "enum": ["owner", "member"] },
+          "joinedAt": { "type": "integer" }
+       },
+       "required": ["role", "joinedAt"]
+    },
+    "Document": {
+      "title": "Document",
+      "description": "A Notion-like document page",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "parentId": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["title", "content", "createdAt", "updatedAt"]
+    },
+    "Video": {
+      "title": "Video",
+      "description": "A Frame.io-like video asset",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "currentVersionId": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["name", "description", "createdAt", "updatedAt"]
+    },
+    "VideoVersion": {
+      "title": "VideoVersion",
+      "description": "A specific version of a video",
+      "type": "object",
+      "properties": {
+        "videoUrl": { "type": "string" },
+        "versionNumber": { "type": "integer" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["videoUrl", "versionNumber", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a video version",
+      "type": "object",
+      "properties": {
+        "versionId": { "type": "string" },
+        "text": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "videoTimeMs": { "type": "integer" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["versionId", "text", "authorId", "videoTimeMs", "createdAt", "authorName"]
+    },
+    "CalendarEvent": {
+      "title": "CalendarEvent",
+      "description": "A Google Calendar event synced to the database with Order details",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "htmlLink": { "type": "string" },
+        "type": { "type": "string" },
+        "updatedAt": { "type": "integer" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "shooter": { "type": "string" },
+        "uploadLink": { "type": "string" },
+        "finalLink": { "type": "string" },
+        "editor": { "type": "string" },
+        "sentMailToEditor": { "type": "boolean" },
+        "status": { "type": "string" },
+        "music": { "type": "string" },
+        "notes": { "type": "string" },
+        "tasks": { "type": "array" },
+        "progress": { "type": "integer" }
+      },
+      "required": ["title", "date", "updatedAt"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A video project submission to an editor",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "status": { "type": "string" },
+        "rawLinks": { "type": "string" },
+        "instructions": { "type": "string" },
+        "deadline": { "type": "string" },
+        "editor": { "type": "string" },
+        "priority": { "type": "string" },
+        "eventTitle": { "type": "string" },
+        "submittedAt": { "type": "integer" },
+        "assets": { "type": "array" },
+        "comments": { "type": "array" }
+      },
+      "required": ["eventId", "ownerId", "status", "submittedAt"]
+    }
+  },
+  "firestore": {
+    "submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/Submission" },
+      "description": "Video submissions nodes"
+    },
+    "users/{userId}/calendar_events/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEvent" },
+      "description": "Synced calendar events for a user"
+    },
+    "projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Projects workspace"
+    },
+    "projects/{projectId}/members/{userId}": {
+       "schema": { "$ref": "#/entities/ProjectMember" },
+       "description": "Members of a project"
+    },
+    "projects/{projectId}/documents/{documentId}": {
+      "schema": { "$ref": "#/entities/Document" },
+      "description": "Documents in a project"
+    },
+    "projects/{projectId}/videos/{videoId}": {
+      "schema": { "$ref": "#/entities/Video" },
+      "description": "Videos in a project"
+    },
+    "projects/{projectId}/videos/{videoId}/versions/{versionId}": {
+      "schema": { "$ref": "#/entities/VideoVersion" },
+      "description": "Versions of a video"
+    },
+    "projects/{projectId}/videos/{videoId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+       "description": "Comments left on a video version"
+    }
+  }
+}

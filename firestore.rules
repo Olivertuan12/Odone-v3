@@ -1,0 +1,223 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+
+    function isProjectMember(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid));
+    }
+    
+    function isProjectOwner(projectId) {
+      let memberDoc = get(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid));
+      return memberDoc != null && memberDoc.data.role == 'owner';
+    }
+
+    // Users and Calendar Events
+    match /users/{userId} {
+      allow get, write: if isSignedIn() && request.auth.uid == userId;
+      
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // Clients
+    match /clients/{clientId} {
+      allow read: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(clientId) && incoming().ownerId == request.auth.uid;
+      allow update, delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+
+    // Projects
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'createdAt', 'updatedAt']) &&
+             data.keys().size() == 4 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.ownerId == request.auth.uid &&
+             data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+    
+    match /projects/{projectId} {
+      allow get: if isSignedIn() && isProjectMember(projectId);
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() && isValidId(projectId) && 
+                    isValidProject(incoming()) &&
+                    incoming().createdAt == request.time &&
+                    incoming().updatedAt == request.time;
+                    
+      allow update: if isSignedIn() && isProjectOwner(projectId) && isValidId(projectId) &&
+                    isValidProject(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']) &&
+                    incoming().ownerId == existing().ownerId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().updatedAt == request.time;
+                    
+      allow delete: if isSignedIn() && isProjectOwner(projectId);
+
+      // Members Subcollection
+      match /members/{userId} {
+        function isValidMember(data) {
+           return data.keys().hasAll(['role', 'joinedAt']) &&
+                  data.keys().size() == 2 &&
+                  data.role is string && data.role in ['owner', 'member'] &&
+                  data.joinedAt is timestamp;
+        }
+        allow get: if isSignedIn() && isProjectMember(projectId);
+        allow list: if isSignedIn() && isProjectMember(projectId);
+        
+        allow create: if isSignedIn() && isValidId(userId) && isValidMember(incoming()) && (
+           isProjectOwner(projectId) ||
+           (getAfter(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == request.auth.uid && incoming().role == 'owner')
+        );
+        allow update: if isSignedIn() && isProjectOwner(projectId) && isValidId(userId) &&
+                      isValidMember(incoming()) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['role']) &&
+                      incoming().joinedAt == existing().joinedAt;
+        allow delete: if isSignedIn() && isProjectOwner(projectId) && userId != request.auth.uid; // Cannot delete self if owner (must delete project)
+      }
+      
+      // Documents Subcollection
+      match /documents/{documentId} {
+         function isValidDocument(data) {
+            return data.keys().hasAll(['title', 'content', 'parentId', 'createdAt', 'updatedAt']) &&
+                   data.keys().size() == 5 &&
+                   data.title is string && data.title.size() <= 200 &&
+                   data.content is string && data.content.size() <= 1000000 &&
+                   (data.parentId == '' || data.parentId is string) &&
+                   data.createdAt is timestamp && data.updatedAt is timestamp;
+         }
+         
+         allow get: if isSignedIn() && isProjectMember(projectId);
+         allow list: if isSignedIn() && isProjectMember(projectId);
+         
+         allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(documentId) &&
+                       isValidDocument(incoming()) &&
+                       incoming().createdAt == request.time &&
+                       incoming().updatedAt == request.time;
+                       
+         allow update: if isSignedIn() && isProjectMember(projectId) && isValidId(documentId) &&
+                       isValidDocument(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'parentId', 'updatedAt']) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt == request.time;
+                       
+         allow delete: if isSignedIn() && isProjectMember(projectId);
+      }
+      
+      // Videos Subcollection
+      match /videos/{videoId} {
+         function isValidVideo(data) {
+            return data.keys().hasAll(['name', 'description', 'currentVersionId', 'createdAt', 'updatedAt']) &&
+                   data.name is string && data.name.size() <= 200 &&
+                   data.description is string && data.description.size() <= 10000 &&
+                   data.get('status', 'New Arrival') in ['New Arrival', 'Editing', 'Need Revision', 'Need Improve', 'Approved', 'Delivered'] &&
+                   (data.currentVersionId == '' || data.currentVersionId is string) &&
+                   (data.get('eventId', '') == '' || data.eventId is string) &&
+                   (data.get('eventDate', '') == '' || data.eventDate is string) &&
+                   data.createdAt is timestamp && data.updatedAt is timestamp;
+         }
+         
+         allow get: if isSignedIn() && isProjectMember(projectId);
+         allow list: if isSignedIn() && isProjectMember(projectId);
+         
+         allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(videoId) &&
+                       isValidVideo(incoming()) &&
+                       incoming().createdAt == request.time &&
+                       incoming().updatedAt == request.time;
+                       
+         allow update: if isSignedIn() && isProjectMember(projectId) && isValidId(videoId) &&
+                       isValidVideo(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'currentVersionId', 'status', 'eventDate', 'eventId', 'updatedAt']) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt == request.time;
+                       
+         allow delete: if isSignedIn() && isProjectMember(projectId);
+         
+         // Versions Subcollection
+         match /versions/{versionId} {
+            function isValidVersion(data) {
+               return data.keys().hasAll(['videoUrl', 'versionNumber', 'createdAt']) &&
+                      data.keys().size() == 3 &&
+                      data.videoUrl is string && data.videoUrl.size() <= 2000 &&
+                      data.versionNumber is number &&
+                      data.createdAt is timestamp;
+            }
+            allow get: if isSignedIn() && isProjectMember(projectId);
+            allow list: if isSignedIn() && isProjectMember(projectId);
+            
+            allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(versionId) &&
+                          isValidVersion(incoming()) &&
+                          incoming().createdAt == request.time;
+                          
+            allow update: if false; // immutable
+            allow delete: if isSignedIn() && isProjectMember(projectId);
+         }
+         
+         // Comments Subcollection
+         match /comments/{commentId} {
+            function isValidComment(data, isCreate) {
+               return data.keys().hasAll(['versionId', 'text', 'authorId', 'authorName', 'videoTimeMs', 'createdAt']) &&
+                      data.keys().size() >= 6 && data.keys().size() <= 7 &&
+                      data.versionId is string && data.versionId.size() <= 128 &&
+                      data.text is string && data.text.size() > 0 && data.text.size() <= 5000 &&
+                      (isCreate ? data.authorId == request.auth.uid : data.authorId is string) &&
+                      data.authorName is string && data.authorName.size() <= 100 &&
+                      data.videoTimeMs is number &&
+                      (data.keys().size() == 6 || (data.keys().hasAll(['resolved']) && data.resolved is bool)) &&
+                      data.createdAt is timestamp;
+            }
+            allow get: if isSignedIn() && isProjectMember(projectId);
+            allow list: if isSignedIn() && isProjectMember(projectId);
+            
+            allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(commentId) &&
+                          isValidComment(incoming(), true) &&
+                          incoming().createdAt == request.time;
+                          
+            allow update: if isSignedIn() && isProjectMember(projectId) && isValidId(commentId) &&
+                          isValidComment(incoming(), false) &&
+                          (
+                             (incoming().diff(existing()).affectedKeys().hasOnly(['resolved'])) ||
+                             (existing().authorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['text', 'resolved']))
+                          ) &&
+                          incoming().authorId == existing().authorId &&
+                          incoming().authorName == existing().authorName &&
+                          incoming().versionId == existing().versionId &&
+                          incoming().videoTimeMs == existing().videoTimeMs &&
+                          incoming().createdAt == existing().createdAt;
+                          
+            allow delete: if isSignedIn() && isProjectMember(projectId) && (existing().authorId == request.auth.uid || isProjectOwner(projectId));
+         }
+      }
+    }
+
+    // Submissions
+    match /submissions/{submissionId} {
+       function isValidSubmission(data) {
+          return data.keys().hasAll(['eventId', 'ownerId', 'status', 'submittedAt']) &&
+                 data.ownerId == request.auth.uid &&
+                 data.eventId is string &&
+                 data.status is string &&
+                 data.submittedAt is timestamp;
+       }
+       allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+       allow get: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+       allow create: if isSignedIn() && isValidId(submissionId) && isValidSubmission(incoming()) && incoming().submittedAt == request.time;
+       allow update: if isSignedIn() && existing().ownerId == request.auth.uid && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'comments']) ||
+          (existing().status == 'Pending Review' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'rawLinks', 'instructions', 'deadline', 'editor', 'priority', 'assets']))
+       );
+       allow delete: if isSignedIn() && existing().ownerId == request.auth.uid;
+    }
+  }
+}
