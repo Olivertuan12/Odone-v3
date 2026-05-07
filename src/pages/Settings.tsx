@@ -18,9 +18,9 @@ import {
   Trash2,
   AlertCircle
 } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '@/src/lib/firebase';
-import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp, collection, getDocs, query } from 'firebase/firestore';
+import { auth, secondaryAuth, db, handleFirestoreError, OperationType } from '@/src/lib/firebase';
+import { GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc, serverTimestamp, collection, getDocs, query, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { DriveFolderMapper } from '../components/DriveFolderMapper';
@@ -39,6 +39,8 @@ export function Settings() {
   const [availableCalendars, setAvailableCalendars] = useState<any[]>([]);
   const [isFetchingCalendars, setIsFetchingCalendars] = useState(false);
   const [isSavingMappings, setIsSavingMappings] = useState(false);
+  const [isAuthenticatingStorage, setIsAuthenticatingStorage] = useState(false);
+  const [isAuthenticatingCalendar, setIsAuthenticatingCalendar] = useState(false);
   const [activeTab, setActiveTab] = useState<'integrations' | 'profile' | 'shortcuts' | 'billing'>('integrations');
 
   useEffect(() => {
@@ -52,10 +54,14 @@ export function Settings() {
           if (data.google_drive_token && !storageToken) {
              setStorageToken(data.google_drive_token);
              setStorageEmail(data.google_drive_email);
+             localStorage.setItem('google_drive_token', data.google_drive_token);
+             if (data.google_drive_email) localStorage.setItem('google_drive_email', data.google_drive_email);
           }
           if (data.google_calendar_token && !calendarToken) {
              setCalendarToken(data.google_calendar_token);
              setCalendarEmail(data.google_calendar_email);
+             localStorage.setItem('google_calendar_token', data.google_calendar_token);
+             if (data.google_calendar_email) localStorage.setItem('google_calendar_email', data.google_calendar_email);
           }
         }
 
@@ -68,7 +74,11 @@ export function Settings() {
         const projectConfigRef = doc(db, 'users', user.uid, 'settings', 'project_config');
         const projectConfigSnap = await getDoc(projectConfigRef);
         if (projectConfigSnap.exists()) {
-          setRootFolder(projectConfigSnap.data().rootFolder || null);
+          const rf = projectConfigSnap.data().rootFolder;
+          if (rf) {
+            setRootFolder(rf);
+            localStorage.setItem('drive_root_folder', rf.id);
+          }
         }
       } catch (e) {
         console.error('Failed to fetch settings', e);
@@ -126,9 +136,10 @@ export function Settings() {
   }, [calendarToken]);
 
   const saveToFirestore = async (key: string, token: string | null, emailKey: string, email: string | null) => {
-    if (!user) return;
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
     try {
-       const docRef = doc(db, 'users', user.uid, 'settings', 'integrations');
+       const docRef = doc(db, 'users', currentUid, 'settings', 'integrations');
        await setDoc(docRef, { [key]: token, [emailKey]: email }, { merge: true });
     } catch(e) {
        console.error("Failed saving to DB", e);
@@ -136,12 +147,21 @@ export function Settings() {
   };
 
   const handleConnectStorage = async () => {
+    if (isAuthenticatingStorage) return;
+    setIsAuthenticatingStorage(true);
     try {
       const provider = new GoogleAuthProvider();
       provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly');
-      provider.addScope('https://www.googleapis.com/auth/drive.file');
-      provider.setCustomParameters({ prompt: 'select_account' });
-      const result = await signInWithPopup(auth, provider);
+      provider.addScope('https://www.googleapis.com/auth/drive');
+      
+      const email = localStorage.getItem('google_drive_email');
+      if (email) {
+        provider.setCustomParameters({ login_hint: email });
+      } else {
+        provider.setCustomParameters({ prompt: 'select_account' });
+      }
+      
+      const result = await signInWithPopup(secondaryAuth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (credential?.accessToken) {
         setStorageToken(credential.accessToken);
@@ -151,13 +171,19 @@ export function Settings() {
         await saveToFirestore('google_drive_token', credential.accessToken, 'google_drive_email', result.user.email);
         fetchDriveStorage(credential.accessToken);
       }
+      await signOut(secondaryAuth);
     } catch (error: any) {
-      if (error.code === 'auth/popup-closed-by-user') {
-        alert("The authentication popup was closed before completion. Please try again and keep the popup open until finished. If the popup didn't appear, check if your browser is blocking popups.");
+      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
+        // Ignore cancelled requests
+        if (error.code === 'auth/popup-closed-by-user') {
+          alert("The authentication popup was closed before completion. Please try again and keep the popup open until finished. If the popup didn't appear, check if your browser is blocking popups.");
+        }
       } else {
         console.error("Error authenticating drive:", error);
         alert(`Authentication error: ${error.message || 'Unknown error'}`);
       }
+    } finally {
+      setIsAuthenticatingStorage(false);
     }
   };
 
@@ -171,11 +197,20 @@ export function Settings() {
   };
 
   const handleConnectCalendar = async () => {
+    if (isAuthenticatingCalendar) return;
+    setIsAuthenticatingCalendar(true);
     try {
       const provider = new GoogleAuthProvider();
       provider.addScope('https://www.googleapis.com/auth/calendar.readonly');
-      provider.setCustomParameters({ prompt: 'select_account' });
-      const result = await signInWithPopup(auth, provider);
+      
+      const email = localStorage.getItem('google_calendar_email');
+      if (email) {
+        provider.setCustomParameters({ login_hint: email });
+      } else {
+        provider.setCustomParameters({ prompt: 'select_account' });
+      }
+      
+      const result = await signInWithPopup(secondaryAuth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (credential?.accessToken) {
         setCalendarToken(credential.accessToken);
@@ -185,13 +220,19 @@ export function Settings() {
         await saveToFirestore('google_calendar_token', credential.accessToken, 'google_calendar_email', result.user.email);
         fetchAvailableCalendars(credential.accessToken);
       }
+      await signOut(secondaryAuth);
     } catch (error: any) {
-      if (error.code === 'auth/popup-closed-by-user') {
-        alert("The authentication popup was closed before completion. Please try again and keep the popup open until finished. If the popup didn't appear, check if your browser is blocking popups.");
+      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
+        // Ignore cancelled requests
+        if (error.code === 'auth/popup-closed-by-user') {
+          alert("The authentication popup was closed before completion. Please try again and keep the popup open until finished. If the popup didn't appear, check if your browser is blocking popups.");
+        }
       } else {
         console.error("Error authenticating calendar:", error);
         alert(`Authentication error: ${error.message || 'Unknown error'}`);
       }
+    } finally {
+      setIsAuthenticatingCalendar(false);
     }
   };
   
@@ -204,32 +245,50 @@ export function Settings() {
     await saveToFirestore('google_calendar_token', null, 'google_calendar_email', null);
   };
 
+  const handleClearSyncedEvents = async () => {
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
+    if (!confirm('Are you sure you want to delete all cached events?')) return;
+    try {
+      const snapshot = await getDocs(query(collection(db, `users/${currentUid}/calendar_events`)));
+      for (const docSnap of snapshot.docs) {
+        await deleteDoc(doc(db, `users/${currentUid}/calendar_events`, docSnap.id));
+      }
+      alert('Local calendar events cache cleared successfully.');
+    } catch (e: any) {
+      alert(`Error clearing events: ${e.message}`);
+    }
+  };
+
   const handleSaveMappings = async () => {
-    if (!user) return;
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
     setIsSavingMappings(true);
     try {
-      await setDoc(doc(db, `users/${user.uid}/settings`, 'calendar_mappings'), {
+      await setDoc(doc(db, `users/${currentUid}/settings`, 'calendar_mappings'), {
         mappings: calendarMappings,
         updatedAt: serverTimestamp()
       });
     } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}/settings/calendar_mappings`);
+      handleFirestoreError(e, OperationType.UPDATE, `users/${currentUid}/settings/calendar_mappings`);
     } finally {
       setIsSavingMappings(false);
     }
   };
 
   const handleSaveRootFolder = async (folderId: string, folderName: string) => {
-    if (!user) return;
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
     try {
-      await setDoc(doc(db, `users/${user.uid}/settings`, 'project_config'), {
+      await setDoc(doc(db, `users/${currentUid}/settings`, 'project_config'), {
         rootFolder: { id: folderId, name: folderName },
         updatedAt: serverTimestamp()
       }, { merge: true });
       setRootFolder({ id: folderId, name: folderName });
+      localStorage.setItem('drive_root_folder', folderId);
       setShowFolderMapper(false);
     } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}/settings/project_config`);
+      handleFirestoreError(e, OperationType.UPDATE, `users/${currentUid}/settings/project_config`);
     }
   };
 
@@ -290,7 +349,14 @@ export function Settings() {
           
           <div className="mt-auto pt-6 border-t border-white/5">
             <button 
-              onClick={() => auth.signOut()}
+              onClick={async () => {
+                localStorage.removeItem('google_drive_token');
+                localStorage.removeItem('google_drive_email');
+                localStorage.removeItem('google_calendar_token');
+                localStorage.removeItem('google_calendar_email');
+                localStorage.removeItem('drive_root_folder');
+                await auth.signOut();
+              }}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-red-400/50 hover:text-red-400 hover:bg-red-400/5 transition-all text-[11px] font-black uppercase tracking-widest"
             >
               <LogOut className="w-4 h-4" />
@@ -317,6 +383,22 @@ export function Settings() {
                     <p className="text-[10px] text-white/30 uppercase tracking-[0.4em] font-mono">Configure API bridge connections</p>
                   </div>
 
+                  <div className="bg-[#121214] border border-white/5 rounded-2xl p-6">
+                     <div className="flex items-center gap-3 mb-4">
+                        <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">
+                           <User className="w-5 h-5" />
+                        </div>
+                        <div>
+                           <h2 className="text-[13px] font-black uppercase tracking-widest text-white/90">Core Identity Config</h2>
+                           <p className="text-[11px] text-white/40">This account was used to login. It does NOT automatically sync your Drive or Calendar.</p>
+                        </div>
+                     </div>
+                     <div className="px-4 py-3 bg-black/40 border border-white/5 rounded-xl flex items-center justify-between">
+                        <span className="text-xs font-mono text-white/70">{user.email || 'Unknown User'}</span>
+                        <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded uppercase font-bold tracking-widest">Active Database Identity</span>
+                     </div>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Google Drive Connection */}
                     <div className="bg-[#121214] border border-white/5 rounded-2xl p-6 flex flex-col relative overflow-hidden group shadow-xl hover:border-white/10 transition-all">
@@ -333,7 +415,7 @@ export function Settings() {
                         </div>
                       </div>
 
-                      {storageToken ? (
+                       {storageToken ? (
                         <div className="space-y-6 flex-1">
                           <div className="flex items-center justify-between p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl">
                             <div className="flex items-center gap-2">
@@ -385,10 +467,11 @@ export function Settings() {
                         <div className="flex-1 flex flex-col justify-center py-4">
                            <button 
                              onClick={handleConnectStorage}
-                             className="w-full py-3 px-4 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-500 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2"
+                             disabled={isAuthenticatingStorage}
+                             className="w-full py-3 px-4 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-500 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                            >
-                              <Plus className="w-4 h-4" />
-                              Initialize Bridge
+                              {isAuthenticatingStorage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                              {isAuthenticatingStorage ? 'Authenticating...' : 'Initialize Bridge'}
                            </button>
                         </div>
                       )}
@@ -416,7 +499,10 @@ export function Settings() {
                               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                               <span className="text-[10px] font-mono text-emerald-400">{calendarEmail}</span>
                             </div>
-                            <button onClick={handleDisconnectCalendar} className="text-[9px] text-white/20 hover:text-red-400 uppercase font-bold transition-colors">Disconnect</button>
+                            <div className="flex items-center gap-2">
+                               <button onClick={handleClearSyncedEvents} className="text-[9px] text-white/50 hover:text-white uppercase font-bold transition-colors border border-white/10 px-2 py-1 rounded">Clear Synced</button>
+                               <button onClick={handleDisconnectCalendar} className="text-[9px] text-white/20 hover:text-red-400 uppercase font-bold transition-colors">Disconnect</button>
+                            </div>
                           </div>
                           <div className="text-[9px] text-white/30 uppercase leading-relaxed font-mono">
                             Syncing {availableCalendars.length} calendar nodes into system buffer.
@@ -426,10 +512,11 @@ export function Settings() {
                         <div className="flex-1 flex flex-col justify-center py-4">
                            <button 
                              onClick={handleConnectCalendar}
-                             className="w-full py-3 px-4 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-500 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2"
+                             disabled={isAuthenticatingCalendar}
+                             className="w-full py-3 px-4 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-500 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                            >
-                              <Plus className="w-4 h-4" />
-                              Connect Temporal Node
+                              {isAuthenticatingCalendar ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                              {isAuthenticatingCalendar ? 'Authenticating...' : 'Connect Temporal Node'}
                            </button>
                         </div>
                       )}

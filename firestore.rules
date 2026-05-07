@@ -24,9 +24,9 @@ service cloud.firestore {
 
     // Users and Calendar Events
     match /users/{userId} {
-      allow get, write: if isSignedIn() && request.auth.uid == userId;
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
       
-      match /{allSubcollections=**} {
+      match /{document=**} {
         allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
     }

@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameMonth, isSameDay, addDays, subDays, parseISO } from 'date-fns';
 import { googleDriveService } from '../services/googleDriveService';
 import { getDoc } from 'firebase/firestore';
-import { ChevronLeft, ChevronRight, Video, Plus, Youtube, Calendar, Clock, Archive, UploadCloud, ExternalLink, Upload, Play, FolderPlus, Loader2, Camera, Folder, Cloud, FolderSearch, RefreshCcw, CheckCircle2, AlertCircle } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Video, Plus, Youtube, Calendar, Clock, Archive, UploadCloud, ExternalLink, Upload, Play, FolderPlus, Loader2, Camera, Folder, Cloud, FolderSearch, RefreshCcw, CheckCircle2, AlertCircle, Search } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { collection, query, getDocs, setDoc, doc, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { collection, query, getDocs, setDoc, doc, serverTimestamp, updateDoc, where, deleteDoc } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '@/src/lib/firebase';
 import { useAuth } from '@/src/lib/AuthContext';
+import { reauthenticateCalendar } from '@/src/services/googleAuthHelpers';
 import { v4 as uuidv4 } from 'uuid';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 
@@ -129,7 +130,10 @@ const FileDropzone = ({
 };
 
 export const CalendarPage = () => {
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const [currentDate, setCurrentDate] = useState<Date>(() => {
+    const saved = sessionStorage.getItem('calendar_currentDate');
+    return saved ? new Date(saved) : new Date();
+  });
   const [events, setEvents] = useState<any[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const { user } = useAuth();
@@ -150,8 +154,13 @@ export const CalendarPage = () => {
   const [availableCalendars, setAvailableCalendars] = useState<any[]>([]);
   const [isFetchingCalendars, setIsFetchingCalendars] = useState(false);
   
-  const [view, setView] = useState<'month' | 'week'>('month');
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [view, setView] = useState<'month' | 'week'>(() => {
+    return (sessionStorage.getItem('calendar_view') as 'month' | 'week') || 'month';
+  });
+  const [selectedDate, setSelectedDate] = useState<Date>(() => {
+    const saved = sessionStorage.getItem('calendar_selectedDate');
+    return saved ? new Date(saved) : new Date();
+  });
   
   const handleUpdateCalendarMapping = async (calId: string, shooterName: string, isEnabled: boolean) => {
     if (!user) return;
@@ -187,11 +196,35 @@ export const CalendarPage = () => {
   };
   const [shooterFilter, setShooterFilter] = useState<string>('All');
   
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [showOtherEvents, setShowOtherEvents] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(localStorage.getItem('google_calendar_token'));
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [syncProgress, setSyncProgress] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(() => {
+    return sessionStorage.getItem('calendar_searchQuery') || '';
+  });
   const [showAddEventModal, setShowAddEventModal] = useState(false);
+
+  useEffect(() => {
+    sessionStorage.setItem('calendar_currentDate', currentDate.toISOString());
+  }, [currentDate]);
+
+  useEffect(() => {
+    sessionStorage.setItem('calendar_view', view);
+  }, [view]);
+
+  useEffect(() => {
+    sessionStorage.setItem('calendar_selectedDate', selectedDate.toISOString());
+  }, [selectedDate]);
+
+  useEffect(() => {
+    sessionStorage.setItem('calendar_shooterFilter', shooterFilter);
+  }, [shooterFilter]);
+
+  useEffect(() => {
+    sessionStorage.setItem('calendar_searchQuery', searchQuery);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (accessToken) {
@@ -227,77 +260,200 @@ export const CalendarPage = () => {
   };
 
   const getStatusConfig = (status: string | undefined) => {
-    const s = status || 'Draft';
+    const s = status || 'Waiting for Raw';
     const configs: Record<string, { bg: string, text: string, border: string, dot: string, label: string }> = {
-      'Confirmed': { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20', dot: 'bg-emerald-500', label: 'CONFIRMED' },
-      'Draft': { bg: 'bg-white/5', text: 'text-white/40', border: 'border-white/10', dot: 'bg-white/20', label: 'DRAFT' },
+      'Waiting for Raw': { bg: 'bg-white/5', text: 'text-white/40', border: 'border-white/10', dot: 'bg-white/20', label: 'WAITING FOR RAW' },
+      'Order Created': { bg: 'bg-sky-500/10', text: 'text-sky-400', border: 'border-sky-500/20', dot: 'bg-sky-500', label: 'ORDER CREATED' },
+      'Uploaded': { bg: 'bg-pink-500/10', text: 'text-pink-400', border: 'border-pink-500/20', dot: 'bg-pink-500', label: 'UPLOADED' },
       'Editing': { bg: 'bg-amber-500/10', text: 'text-amber-400', border: 'border-amber-500/20', dot: 'bg-amber-500', label: 'EDITING' },
-      'Completed': { bg: 'bg-indigo-500/10', text: 'text-indigo-400', border: 'border-indigo-500/20', dot: 'bg-indigo-500', label: 'COMPLETED' },
-      'New Arrival': { bg: 'bg-pink-500/10', text: 'text-pink-400', border: 'border-pink-500/20', dot: 'bg-pink-500', label: 'NEW ARRIVAL' },
-      'Scheduled': { bg: 'bg-sky-500/10', text: 'text-sky-400', border: 'border-sky-500/20', dot: 'bg-sky-500', label: 'SCHEDULED' },
-      'Archived': { bg: 'bg-amber-500/10', text: 'text-amber-500', border: 'border-amber-500/20', dot: 'bg-amber-500', label: 'ARCHIVED' },
+      'Revision': { bg: 'bg-orange-500/10', text: 'text-orange-400', border: 'border-orange-500/20', dot: 'bg-orange-500', label: 'REVISION' },
+      'Delivered': { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20', dot: 'bg-emerald-500', label: 'DELIVERED' },
+      'Archived': { bg: 'bg-white/5', text: 'text-white/20', border: 'border-white/5', dot: 'bg-white/10', label: 'ARCHIVED' },
     };
-    return configs[s] || configs['Draft'];
+    // Fallback for legacy statuses or unknown ones
+    if (s === 'Draft') return configs['Waiting for Raw'];
+    if (s === 'Confirmed') return configs['Order Created'];
+    if (s === 'Scheduled') return configs['Order Created'];
+    if (s === 'Completed') return configs['Delivered'];
+    
+    return configs[s] || configs['Waiting for Raw'];
+  };
+
+  const cleanHtml = (htmlDesc: string) => {
+    if (!htmlDesc) return [];
+    const text = htmlDesc
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(div|p|h[1-6]|li)>/gi, '\n')
+      .replace(/<a[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi, '$2 [$1]')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>');
+    return text.split('\n').map((l: string) => l.replace(/\s+/g, ' ').trim());
+  };
+
+  const detectPlatform = (lines: string[]) => {
+    const full = lines.join(' ').toLowerCase();
+    if (full.includes('hd.pics/su/') || lines.some(l => l.includes('hd.pics/su/'))) {
+      return 'hdphotohub';
+    }
+    if (full.includes('order items') && (full.includes('intake answers') || full.includes('order id'))) {
+      return 'fotello';
+    }
+    return 'starep';
+  };
+
+  const parseHDPhotoHub = (lines: string[]) => {
+    const urlIdx = lines.findIndex((l: string) => l.includes('hd.pics/su/'));
+    const sqftIdx = lines.findIndex((l: string) => l.toLowerCase().includes('sqft'));
+    const orderItems: string[] = [];
+    
+    if (urlIdx !== -1) {
+      const serviceLines = lines.slice(urlIdx + 1, sqftIdx !== -1 ? sqftIdx : lines.length);
+      serviceLines.forEach((l: string) => {
+        if (l.includes(':')) {
+          const item = l.split(':')[1].trim();
+          if (item && !orderItems.includes(item)) {
+            orderItems.push(item);
+          }
+        }
+      });
+    }
+
+    return {
+      items: orderItems,
+      intake: [],
+      orderId: '',
+      photographers: ''
+    };
+  };
+
+  const parseStarep = (lines: string[]) => {
+    const getBlock = (start: string, end?: string) => {
+      let si = lines.findIndex((l: string) => l.toLowerCase().includes(start.toLowerCase()));
+      let ei = end ? lines.findIndex((l: string, i: number) => i > si && l.toLowerCase().includes(end.toLowerCase())) : lines.length;
+      if (si === -1) return [];
+      if (ei === -1) ei = lines.length;
+      return lines.slice(si + 1, ei).filter((l: string) => !/^[=-]{3,}$/.test(l) && l.length > 0);
+    };
+
+    const pkgLines = getBlock('Booked packages and services', 'Location');
+    const orderItems = pkgLines.length > 1 ? pkgLines.slice(1).map((i: string) => i.replace(/^- /, '').trim()) : [];
+    
+    const intake: {q: string, a: string}[] = [];
+    const entryNotes = getBlock('Entry Notes', 'Amenities').join('\n');
+    if (entryNotes) intake.push({ q: 'Entry Notes', a: entryNotes });
+    const amenities = getBlock('Amenities', 'Client Preferences').join('\n');
+    if (amenities) intake.push({ q: 'Amenities or features to highlight', a: amenities });
+    const prefs = getBlock('Client Preferences', 'Photographers').join('\n');
+    if (prefs) intake.push({ q: 'Client Preferences', a: prefs });
+
+    return {
+      items: orderItems,
+      intake,
+      orderId: '',
+      photographers: getBlock('Photographers', '---').filter((l: string) => l.length > 0).join(', ')
+    };
+  };
+
+  const parseFotello = (lines: string[]) => {
+    const oiStart = lines.findIndex((l: string) => l.toLowerCase() === 'order items');
+    const oiEnd = lines.findIndex((l: string, i: number) => i > oiStart && (l.toLowerCase() === 'intake answers' || l.toLowerCase().startsWith('order id')));
+    
+    const orderItems: string[] = [];
+    if (oiStart !== -1) {
+      const end = oiEnd !== -1 ? oiEnd : lines.length;
+      const oiLines = lines.slice(oiStart + 1, end).filter((l: string) => l.length > 0);
+      oiLines.forEach((l: string) => {
+        const cleaned = l.replace(/^[•◦]\s*/, '').trim();
+        if (cleaned) orderItems.push(cleaned);
+      });
+    }
+
+    const iaStart = lines.findIndex((l: string) => l.toLowerCase() === 'intake answers');
+    const iaEnd = lines.findIndex((l: string, i: number) => i > iaStart && l.toLowerCase().startsWith('order id'));
+    const intake: {q: string, a: string}[] = [];
+    
+    if (iaStart !== -1) {
+      const end = iaEnd !== -1 ? iaEnd : lines.length;
+      const iaLines = lines.slice(iaStart + 1, end).filter((l: string) => l.length > 0);
+      
+      let currentQ: {q: string, a: string} | null = null;
+      iaLines.forEach((l: string) => {
+        const cleaned = l.replace(/^[•◦]\s*/, '').trim();
+        if (!cleaned) return;
+        
+        if (l.startsWith('•')) {
+          if (currentQ) intake.push(currentQ);
+          currentQ = { q: cleaned, a: '' };
+        } else if (currentQ) {
+          currentQ.a = currentQ.a ? currentQ.a + ' ' + cleaned : cleaned;
+        }
+      });
+      if (currentQ) intake.push(currentQ);
+    }
+
+    const oidLine = lines.find((l: string) => l.toLowerCase().startsWith('order id'));
+    let orderId = '';
+    if (oidLine) {
+      const oidIdx = lines.indexOf(oidLine);
+      if (oidIdx + 1 < lines.length) {
+        orderId = lines[oidIdx + 1].trim();
+      }
+    }
+
+    return {
+      items: orderItems,
+      intake,
+      orderId,
+      photographers: ''
+    };
   };
 
   const parseDescriptionSections = (description: string) => {
-    if (!description) return { items: [], intake: [], orderId: '', photographers: '' };
-    const sections: any = { items: [], intake: [], orderId: '', photographers: '' };
+    if (!description) return { items: [], intake: [], orderId: '', photographers: '', clientEmail: '' };
     
-    const orderIdMatch = description.match(/<b>Order ID<\/b>\s*<br>\s*([a-zA-Z0-9\-_]+)/i) || 
-                        description.match(/Order ID[:\s]+([a-zA-Z0-9\-_]+)/i);
-    if (orderIdMatch) sections.orderId = orderIdMatch[1];
+    const emailMatch = description.match(/(?:mailto:)?([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i);
+    const clientEmail = emailMatch ? (emailMatch[1] || emailMatch[0]).trim() : '';
 
-    const itemsSection = description.match(/<b>Order Items<\/b>([\s\S]*?)(?:<b>|$)/i) ||
-                        description.match(/Booked packages and services[\s=]+([\s\S]*?)(?:Location|Entry|Amenities|$)/i);
-    if (itemsSection) {
-      sections.items = itemsSection[1]
-        .split(/<br>|•|◦|\n|-/)
-        .map(s => s.replace(/<[^>]*>?/gm, '').trim())
-        .filter(s => s.length > 3 && !s.includes('====') && !s.includes('----'));
+    const lines = cleanHtml(description);
+    const platform = detectPlatform(lines);
+    
+    let result;
+    if (platform === 'hdphotohub') {
+      result = parseHDPhotoHub(lines);
+    } else if (platform === 'fotello') {
+      result = parseFotello(lines);
+    } else {
+      result = parseStarep(lines);
     }
 
-    const intakePatterns = [
-      { q: "Entry Notes", pattern: /(?:Entry Notes|How will we access)[^=]*[=\s]+([\s\S]*?)(?:Amenities|Client|Location|Photographers|$)/i },
-      { q: "Amenities/Features", pattern: /(?:Amenities or features to highlight)[^=]*[=\s]+([\s\S]*?)(?:Client|Preferences|Photographers|$)/i },
-      { q: "Client Preferences", pattern: /(?:Client Preferences)[^=]*[=\s]+([\s\S]*?)(?:Photographers|$)/i },
-      { q: "Access Code", pattern: /(?:Gate code|Lockbox|Code)[:\s]+([a-zA-Z0-9]+)/i }
-    ];
-
-    intakePatterns.forEach(p => {
-      const match = description.match(p.pattern);
-      if (match && match[1].trim() && match[1].trim().length > 1) {
-        sections.intake.push({ q: p.q, a: match[1].replace(/<[^>]*>?/gm, '').trim() });
-      }
-    });
-
-    const photoMatch = description.match(/(?:Photographers|Photographer|Shooter)s?[:\s\r\n=]+([^<]*)/i);
-    if (photoMatch) sections.photographers = photoMatch[1].replace(/<[^>]*>?/gm, '').trim();
-
-    if (sections.intake.length === 0) {
-      const intakeSection = description.match(/<b>Intake Answers<\/b>([\s\S]*?)(?:<b>Order ID|$)/i);
-      if (intakeSection) {
-        const rawIntake = intakeSection[1];
-        const pairs = rawIntake.split(/•\s*<b>/);
-        sections.intake = pairs.slice(1).map(p => {
-           const parts = p.split(/<\/b>\s*<br>\s*/);
-           return {
-             q: parts[0]?.replace(/<[^>]*>?/gm, '').trim(),
-             a: parts[1]?.replace(/<[^>]*>?/gm, '').trim()
-           };
-        }).filter(p => p.q && p.a);
-      }
+    if (!result.photographers) {
+       const photoMatch = description.match(/(?:Photographers|Photographer|Shooter)s?[:\s\r\n=]+([^<]*)/i);
+       if (photoMatch) result.photographers = photoMatch[1].replace(/<[^>]*>?/gm, '').trim();
     }
 
-    const emailMatch = description.match(/([a-zA-Z0-9.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+)/i);
-    if (emailMatch) {
-      sections.clientEmail = emailMatch[1];
-    }
-
-    return sections;
+    return { ...result, clientEmail };
   };
 
   useEffect(() => {
+    const checkAndClearOldEvents = async () => {
+      if (user?.email === 'olivertuan198@gmail.com' && !localStorage.getItem('cleared_events_olivertuan198_v2')) {
+        try {
+          const q = query(collection(db, `users/${user.uid}/calendar_events`));
+          const snapshot = await getDocs(q);
+          const deletePromises = snapshot.docs.map(docSnap => deleteDoc(doc(db, `users/${user.uid}/calendar_events`, docSnap.id)));
+          await Promise.all(deletePromises);
+          localStorage.setItem('cleared_events_olivertuan198_v2', 'true');
+          console.log("Cleared old events for olivertuan198 v2");
+        } catch (e) {
+          console.error("Failed to clear events", e);
+        }
+      }
+    };
+    checkAndClearOldEvents();
+
     const fetchLocalEvents = async () => {
       if (!user) return;
       try {
@@ -395,31 +551,43 @@ export const CalendarPage = () => {
   }, [accessToken]);
 
   useEffect(() => {
-    if (accessToken) {
-      fetchAvailableCalendars(accessToken);
+    if (accessToken && user) {
+      const hasSynced = sessionStorage.getItem(`synced_calendar_${user.uid}`);
+      
+      if (availableCalendars.length === 0) {
+        fetchAvailableCalendars(accessToken).then((cals) => {
+          if (!hasSynced) {
+            fetchCalendarEvents(accessToken, cals);
+          }
+        });
+      } else {
+        if (!hasSynced) {
+          fetchCalendarEvents(accessToken, availableCalendars);
+        }
+      }
     }
-  }, [accessToken]);
+  }, [accessToken, user]);
 
   const authenticateCalendar = async () => {
+    if (!user || isAuthenticating) return;
+    setIsAuthenticating(true);
     try {
-      const provider = new GoogleAuthProvider();
-      provider.addScope('https://www.googleapis.com/auth/calendar.readonly');
-      provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly');
-      provider.setCustomParameters({ prompt: 'consent' });
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (credential?.accessToken) {
-        setAccessToken(credential.accessToken);
-        fetchAvailableCalendars(credential.accessToken);
-        fetchCalendarEvents(credential.accessToken);
+      const newToken = await reauthenticateCalendar(user.uid);
+      if (newToken) {
+        setAccessToken(newToken);
+        // The useEffect will catch the accessToken update and trigger the fetches
       }
     } catch (e: any) {
-      if (e.code === 'auth/popup-closed-by-user') {
-        alert("The authentication popup was closed before completion. Please try again and keep the popup open until finished. If the popup didn't appear, check if your browser is blocking popups.");
-      } else {
+      if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') {
+        if (e.code === 'auth/popup-closed-by-user') {
+          alert("The authentication popup was closed before completion. Please try again and keep the popup open until finished. If the popup didn't appear, check if your browser is blocking popups.");
+        }
+      } else if (e.message !== 'Authentication already in progress') {
         console.error("Error authenticating calendar:", e);
         alert(`Authentication error: ${e.message || 'Unknown error'}`);
       }
+    } finally {
+      setIsAuthenticating(false);
     }
   };
 
@@ -432,6 +600,7 @@ export const CalendarPage = () => {
       if (response.ok) {
         const data = await response.json();
         setAvailableCalendars(data.items || []);
+        return data.items || [];
       } else if (response.status === 401) {
         setAccessToken(null);
       }
@@ -440,19 +609,32 @@ export const CalendarPage = () => {
     } finally {
       setIsFetchingCalendars(false);
     }
+    return [];
   };
 
-  const fetchCalendarEvents = async (token: string) => {
+  const fetchCalendarEvents = async (token: string, calsList?: any[]) => {
     setIsLoadingEvents(true);
     setSyncProgress(1);
     try {
       const timeMin = startOfMonth(subMonths(currentDate, 1)).toISOString();
       const timeMax = endOfMonth(addMonths(currentDate, 6)).toISOString();
       
-      // Use manual mappings if they exist, otherwise fallback to primary
-      const calendarsToFetch = calendarMappings.length > 0 
+      const calsToUse = calsList || availableCalendars;
+      // Default to checking all available calendars if no manual mappings exists
+      let calendarsToFetch = calendarMappings.length > 0 
         ? calendarMappings.map(m => ({ id: m.calendarId, shooter: m.shooterName }))
-        : [{ id: 'primary', shooter: user?.displayName || 'Editor' }];
+        : (calsToUse.length > 0 ? calsToUse.map(c => {
+            const summaryLower = (c.summary || '').toLowerCase();
+            let autoShooter = 'Unassigned';
+            if (summaryLower.includes('kyle')) autoShooter = 'Kyle';
+            else if (summaryLower.includes('jack')) autoShooter = 'Jack';
+            
+            return { 
+              id: c.id, 
+              shooter: autoShooter,
+              summary: c.summary 
+            };
+          }) : [{ id: 'primary', shooter: user?.displayName || 'Editor' }]);
 
       let allFreshEvents: any[] = [];
 
@@ -465,7 +647,10 @@ export const CalendarPage = () => {
           
           if (!response.ok) {
             console.error(`Google Calendar API Error for ${cal.id}:`, await response.text());
-            if (response.status === 401) setAccessToken(null);
+            if (response.status === 401) {
+              setAccessToken(null);
+              localStorage.removeItem('google_calendar_token');
+            }
             continue;
           }
 
@@ -500,9 +685,27 @@ export const CalendarPage = () => {
         const total = allFreshEvents.length;
         for (let i = 0; i < total; i++) {
           const evt = allFreshEvents[i];
+          
+          // Parse description to determine if it's a real order
+          const parsed = parseDescriptionSections(evt.description || '');
+          const title = (evt.title || '').toLowerCase();
+          const desc = (evt.description || '').toLowerCase();
+          const hasOrderKeywords = title.match(/shoot|order|property|photos?|video/i) || 
+                                  desc.includes('hd.pics/su/') || 
+                                  desc.includes('tonomo.io') ||
+                                  desc.includes('booked packages');
+          
+          const addressPattern = /^\d+\s+[A-Za-z0-9\s]+(?:St|Ave|Dr|Ln|Cir|Rd|Blvd|Way|Pl|Ct|Ter|Pkwy|Loop)/i;
+          const looksLikeAddress = addressPattern.test(evt.title || '');
+          
+          const isRealOrder = !!(evt.location && (parsed.items.length > 0 || parsed.orderId || hasOrderKeywords || looksLikeAddress));
+          
             try {
               await setDoc(doc(db, `users/${user.uid}/calendar_events`, evt.id), {
                 ...evt,
+                packageName: parsed.items[0] || '',
+                orderId: parsed.orderId || '',
+                isOrder: isRealOrder,
                 updatedAt: serverTimestamp()
               }, { merge: true });
             } catch(err) {
@@ -522,6 +725,9 @@ export const CalendarPage = () => {
     } catch (e) {
       console.error("Fetch Exception:", e);
     } finally {
+      if (user) {
+        sessionStorage.setItem(`synced_calendar_${user.uid}`, 'true');
+      }
       setTimeout(() => {
         setIsLoadingEvents(false);
         setSyncProgress(0);
@@ -583,7 +789,7 @@ export const CalendarPage = () => {
       location: formData.get('location') as string,
       clientName: formData.get('clientName') as string,
       shooter: formData.get('shooter') as string,
-      status: 'Scheduled',
+      status: 'Waiting for Raw',
       updatedAt: serverTimestamp()
     };
 
@@ -637,6 +843,25 @@ export const CalendarPage = () => {
 
   const filteredEvents = events.filter(e => {
     const searchLower = searchQuery.toLowerCase();
+    
+    // Only show real orders unless showOtherEvents is true
+    // Fallback for events that haven't been processed with the isOrder flag yet
+    const title = (e.title || '').toLowerCase();
+    const desc = (e.description || '').toLowerCase();
+    const hasOrderKeywords = title.match(/shoot|order|property|photos?|video/i) || 
+                            desc.includes('hd.pics/su/') || 
+                            desc.includes('tonomo.io') ||
+                            desc.includes('booked packages');
+    
+    // An event with location and a title that looks like an address pattern (starts with digits) is almost certainly an order
+    const addressPattern = /^\d+\s+[A-Za-z0-9\s]+(?:St|Ave|Dr|Ln|Cir|Rd|Blvd|Way|Pl|Ct|Ter|Pkwy|Loop)/i;
+    const looksLikeAddress = addressPattern.test(e.title || '');
+    
+    const resolvedIsOrder = e.isOrder === true || (!!e.location && (!!e.packageName || !!hasOrderKeywords || looksLikeAddress));
+    
+    if (!showOtherEvents && !resolvedIsOrder) {
+      return false;
+    }
     
     if (shooterFilter !== 'All') {
       const eventShooter = getEventShooter(e);
@@ -910,37 +1135,25 @@ export const CalendarPage = () => {
 
   return (
     <div className="flex-1 flex flex-col h-full relative z-0 overflow-hidden">
-      <header className="h-12 shrink-0 border-b border-white/10 flex items-center justify-between px-6 bg-[#050505]">
-        <div className="flex items-center gap-6">
-           <h1 className="text-xs font-black uppercase tracking-[0.2em] text-white">Shooting Schedule</h1>
+      <header className="h-14 shrink-0 border-b border-white/10 flex items-center justify-between px-6 bg-[#050505] overflow-x-auto overflow-y-hidden custom-scrollbar-hide">
+        <div className="flex items-center gap-6 shrink-0">
+           <h1 className="text-xs font-black uppercase tracking-[0.2em] text-white whitespace-nowrap">Shooting Schedule</h1>
            {accessToken ? (
-              <div className="text-[9px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded font-mono uppercase border border-emerald-500/20">Live Sync</div>
+              <div className="text-[9px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded font-mono uppercase border border-emerald-500/20 whitespace-nowrap">Live Sync</div>
            ) : (
               <button 
                 onClick={authenticateCalendar}
-                className="text-[9px] text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-0.5 rounded font-mono uppercase transition-colors border border-indigo-500/20"
+                disabled={isAuthenticating}
+                className="text-[9px] text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-0.5 rounded font-mono uppercase transition-colors border border-indigo-500/20 whitespace-nowrap flex items-center gap-1.5 disabled:opacity-50"
               >
-                Connect Calendar
+                {isAuthenticating ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Calendar className="w-2.5 h-2.5" />}
+                {isAuthenticating ? 'Authenticating...' : 'Connect Calendar'}
               </button>
            )}
         </div>
         
-        <div className="flex items-center gap-6">
-           <Link 
-             to="/settings"
-             className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded text-[10px] uppercase font-bold transition-all border border-white/10 shadow-lg"
-           >
-              <Plus className="w-3 h-3" />
-              Configure Sync
-           </Link>
-           <button 
-             onClick={() => setShowAddEventModal(true)}
-             className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white rounded text-[10px] uppercase font-bold transition-all border border-white/10 shadow-lg"
-           >
-              <Plus className="w-3 h-3" />
-              New Shoot
-           </button>
-           <div className="flex items-center bg-black/40 rounded border border-white/10 p-0.5">
+        <div className="flex items-center gap-6 shrink-0 pl-6">
+           <div className="flex items-center bg-black/40 rounded border border-white/10 p-0.5 whitespace-nowrap">
               <button 
                 onClick={() => setView('month')}
                 className={`px-3 py-1 text-[9px] font-black uppercase tracking-widest transition-all rounded ${view === 'month' ? 'bg-white/10 text-white shadow-sm' : 'text-white/20 hover:text-white/40'}`}
@@ -955,7 +1168,7 @@ export const CalendarPage = () => {
               </button>
            </div>
            
-           <div className="flex items-center gap-3">
+           <div className="flex items-center gap-3 whitespace-nowrap">
               <button 
                 onClick={goToToday}
                 className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-white border border-white/10 rounded transition-all"
@@ -978,7 +1191,7 @@ export const CalendarPage = () => {
            <button 
              disabled={!accessToken || isLoadingEvents}
              onClick={() => accessToken && fetchCalendarEvents(accessToken)}
-             className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded text-[10px] uppercase font-bold transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+             className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded text-[10px] uppercase font-bold transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] whitespace-nowrap"
            >
               <Calendar className="w-3 h-3" />
               {isLoadingEvents ? 'Syncing...' : 'Sync Cloud'}
@@ -996,75 +1209,10 @@ export const CalendarPage = () => {
       )}
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative bg-[#080809] p-5 gap-5">
-        {/* Calendars Sidebar */}
-        <div className="w-[220px] shrink-0 flex flex-col gap-4 overflow-y-auto custom-scrollbar pr-1 hidden md:flex">
-             <div className="text-[10px] font-black uppercase text-white/40 tracking-widest px-2 flex items-center justify-between">
-                My Calendars
-                {isFetchingCalendars && <Loader2 className="w-3 h-3 animate-spin text-white/20" />}
-             </div>
-             {accessToken ? (
-               <div className="space-y-2">
-                 {availableCalendars.map((cal) => {
-                   const mapping = calendarMappings.find(m => m.calendarId === cal.id);
-                   const isEnabled = !!mapping;
-                   const shooter = mapping?.shooterName || 'Unassigned';
-
-                   return (
-                     <div key={cal.id} className="p-3 bg-[#121214] border border-white/5 rounded-xl transition-all flex flex-col gap-3">
-                        <label className="flex items-start gap-3 cursor-pointer group">
-                          <div className="relative flex items-center justify-center mt-0.5 shrink-0">
-                             <input 
-                               type="checkbox" 
-                               className="w-4 h-4 rounded appearance-none border border-white/20 checked:bg-indigo-500 checked:border-indigo-500 transition-all cursor-pointer"
-                               checked={isEnabled}
-                               onChange={(e) => handleUpdateCalendarMapping(cal.id, shooter, e.target.checked)}
-                             />
-                             {isEnabled && <svg className="w-2.5 h-2.5 text-white absolute pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                          </div>
-                          <div className="flex-1 truncate">
-                             <div className="text-[10px] font-bold text-white/80 uppercase truncate group-hover:text-white transition-colors" title={cal.summary}>{cal.summary}</div>
-                          </div>
-                        </label>
-                        
-                        {isEnabled && (
-                          <div className="flex bg-black/40 p-1 rounded-lg border border-white/5 ml-7">
-                             {['Kyle', 'Jack', 'Unassigned'].map(name => {
-                                const isActive = shooter === name;
-                                return (
-                                  <button
-                                    key={name}
-                                    title={name}
-                                    onClick={() => handleUpdateCalendarMapping(cal.id, name, true)}
-                                    className={`flex-1 py-1 rounded text-[8px] font-black uppercase tracking-widest transition-all truncate px-1 ${
-                                      isActive 
-                                        ? (name === 'Kyle' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 shadow-[0_0_10px_rgba(6,182,212,0.1)]' : 
-                                           name === 'Jack' ? 'bg-fuchsia-500/20 text-fuchsia-400 border border-fuchsia-500/40 shadow-[0_0_10px_rgba(217,70,239,0.1)]' :
-                                           'bg-white/10 text-white border border-white/20 shadow-sm')
-                                        : 'text-white/30 hover:text-white/60 hover:bg-white/5 border border-transparent'
-                                    }`}
-                                  >
-                                    {name === 'Unassigned' ? 'N/A' : name}
-                                  </button>
-                                );
-                             })}
-                          </div>
-                        )}
-                     </div>
-                   );
-                 })}
-               </div>
-             ) : (
-                <div className="p-4 rounded-xl border border-white/5 border-dashed text-center space-y-3 mt-4">
-                   <Calendar className="w-5 h-5 text-white/20 mx-auto" />
-                   <div className="text-[9px] text-white/40 uppercase font-mono leading-relaxed">Connect to map shooters to specific calendars</div>
-                </div>
-             )}
-        </div>
-
-        <div className="flex-1 flex flex-col gap-4 overflow-hidden">
-           <div className="flex gap-3 max-w-2xl">
+        <div className="flex-1 flex flex-col gap-4 overflow-y-auto custom-scrollbar pr-2 pb-2">
+           <div className="flex gap-3 max-w-2xl shrink-0">
               <div className="relative group flex-1">
-                 <Plus className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-indigo-400 transition-colors" />
+                 <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-indigo-400 transition-colors" />
                  <input 
                    type="text"
                    placeholder="Search orders, clients, locations..."
@@ -1079,26 +1227,38 @@ export const CalendarPage = () => {
                    const colors = shooter === 'Kyle' 
                      ? { active: 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400', hover: 'hover:border-cyan-500/30' }
                      : { active: 'bg-fuchsia-500/20 border-fuchsia-500/50 text-fuchsia-400', hover: 'hover:border-fuchsia-500/30' };
-                   
-                   return (
-                     <button
-                       key={shooter}
-                       onClick={() => setShooterFilter(isActive ? 'All' : shooter)}
-                       className={`flex items-center gap-2 px-4 py-3 rounded-xl border text-[11px] font-black uppercase tracking-widest transition-all shadow-xl ${
-                         isActive
-                           ? colors.active
-                           : `bg-[#121214] border-white/5 text-white/50 hover:text-white ${colors.hover}`
-                       }`}
-                     >
-                       <div className={`w-1.5 h-1.5 rounded-full ${isActive ? (shooter === 'Kyle' ? 'bg-cyan-400' : 'bg-fuchsia-400') : 'bg-white/20'}`} />
-                       {shooter}
-                     </button>
-                   );
-                 })}
+
+                    return (
+                        <button
+                          key={shooter}
+                          onClick={() => setShooterFilter(isActive ? 'All' : shooter)}
+                          className={`flex items-center gap-2 px-4 py-3 rounded-xl border text-[11px] font-black uppercase tracking-widest transition-all shadow-xl ${
+                            isActive
+                              ? colors.active
+                              : `bg-[#121214] border-white/5 text-white/50 hover:text-white ${colors.hover}`
+                          }`}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full ${isActive ? (shooter === 'Kyle' ? 'bg-cyan-400' : 'bg-fuchsia-400') : 'bg-white/20'}`} />
+                          {shooter}
+                        </button>
+                    );
+                  })}
+
+                  <button
+                    onClick={() => setShowOtherEvents(!showOtherEvents)}
+                    className={`flex items-center gap-2 px-4 py-3 rounded-xl border text-[11px] font-black uppercase tracking-widest transition-all shadow-xl whitespace-nowrap ml-2 ${
+                      showOtherEvents
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
+                        : 'bg-[#121214] border-white/5 text-white/50 hover:text-white hover:border-amber-500/30'
+                    }`}
+                  >
+                    <div className={`w-1.5 h-1.5 rounded-full ${showOtherEvents ? 'bg-amber-400' : 'bg-white/20'}`} />
+                    {showOtherEvents ? 'Hide Non-Orders' : 'Show All Events'}
+                  </button>
               </div>
            </div>
 
-           <div className="flex-1 flex flex-col border border-white/5 rounded-2xl overflow-hidden bg-[#121214] shadow-2xl">
+           <div className="flex-1 min-h-[700px] flex flex-col border border-white/5 rounded-2xl overflow-hidden bg-[#121214] shadow-2xl shrink-0">
               <div className="grid grid-cols-7 w-full border-b border-white/5 bg-[#0D0D0E]">
                 {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
                   <div key={d} className="p-3 text-center text-[10px] font-black uppercase tracking-[0.2em] text-white/20">
@@ -1146,7 +1306,7 @@ export const CalendarPage = () => {
                                      key={`${evt.id}-${idx}`} 
                                      onClick={(e) => {
                                        e.stopPropagation();
-                                       setSelectedEventId(evt.id);
+                                       navigate(`/order/${evt.id}`);
                                      }}
                                      className={`relative border rounded px-1.5 py-1 transition-all cursor-pointer ${config.bg} ${config.text} ${config.border} hover:scale-[1.02] shadow-sm flex items-center gap-1.5`}
                                    >
@@ -1172,9 +1332,73 @@ export const CalendarPage = () => {
                  </div>
               </div>
            </div>
+
+           {/* My Calendars moved here */}
+           <div className="bg-[#121214] border border-white/5 rounded-2xl p-4 shrink-0 transition-all z-10 w-full overflow-x-auto custom-scrollbar">
+             <div className="flex flex-col gap-1 mb-3">
+               <div className="text-[10px] font-black uppercase text-white/40 tracking-widest flex items-center justify-between min-w-max pr-4">
+                  My Calendars
+                  {isFetchingCalendars && <Loader2 className="w-3 h-3 animate-spin text-white/20" />}
+               </div>
+               {localStorage.getItem('google_calendar_email') && (
+                 <div className="text-[9px] text-indigo-400/80 font-mono flex items-center gap-1.5">
+                   <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                   {localStorage.getItem('google_calendar_email')}
+                 </div>
+               )}
+             </div>
+             {accessToken ? (
+               <div className="flex gap-4 pb-2 items-start min-w-max">
+                 {availableCalendars.map((cal) => {
+                   const mapping = calendarMappings.find(m => m.calendarId === cal.id);
+                   const isEnabled = !!mapping;
+                   const shooter = mapping?.shooterName || 'Unassigned';
+
+                   return (
+                     <div key={cal.id} className="min-w-[240px] shrink-0 p-1 pl-2.5 bg-black/40 border border-white/5 rounded-xl transition-all flex items-center gap-3 group">
+                        <div className="flex-1 min-w-[80px] truncate">
+                          <div className="flex-1 truncate">
+                             <div className="text-[10px] font-bold text-white/50 uppercase truncate group-hover:text-white transition-colors" title={cal.summary}>{cal.summary}</div>
+                          </div>
+                        </div>
+                        
+                        {isEnabled && (
+                          <div className="flex bg-[#121214]/50 p-0.5 rounded-lg border border-white/5 shrink-0">
+                             {['Kyle', 'Jack'].map(name => {
+                                const isActive = shooter === name;
+                                return (
+                                  <button
+                                    key={name}
+                                    title={name}
+                                    onClick={() => handleUpdateCalendarMapping(cal.id, name, true)}
+                                    className={`px-3 py-1 rounded-md text-[9px] font-black uppercase tracking-widest transition-all ${
+                                      isActive 
+                                        ? (name === 'Kyle' ? 'bg-cyan-500/20 text-cyan-400' : 
+                                           name === 'Jack' ? 'bg-fuchsia-500/20 text-fuchsia-400' :
+                                           'bg-white/10 text-white')
+                                        : 'text-white/20 hover:text-white/50 hover:bg-white/5'
+                                    }`}
+                                  >
+                                    {name}
+                                  </button>
+                                );
+                             })}
+                          </div>
+                        )}
+                     </div>
+                   );
+                 })}
+               </div>
+             ) : (
+                <div className="p-4 rounded-xl border border-white/5 border-dashed text-center space-y-3 max-w-sm mx-auto">
+                   <Calendar className="w-5 h-5 text-white/20 mx-auto" />
+                   <div className="text-[9px] text-white/40 uppercase font-mono leading-relaxed">Connect to map shooters to specific calendars</div>
+                </div>
+             )}
+           </div>
         </div>
 
-        <div className="w-full md:w-80 shrink-0 flex flex-col gap-5">
+        <div className="w-full md:w-52 shrink-0 flex flex-col gap-5">
            <div className="bg-[#121214] border border-white/5 rounded-2xl p-5 flex-1 flex flex-col overflow-hidden shadow-2xl relative">
               <div className="flex items-center justify-between mb-4">
                  <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30 truncate pr-2">
@@ -1193,7 +1417,7 @@ export const CalendarPage = () => {
                           return (
                              <div 
                                key={`side-${evt.id}-${idx}`} 
-                               onClick={() => setSelectedEventId(evt.id)}
+                               onClick={() => navigate(`/order/${evt.id}`)}
                                className={`p-3 bg-white/[0.02] border rounded-xl transition-all cursor-pointer group hover:bg-[#1A1A1C] relative overflow-hidden ${config.border}`}
                              >
                                 <div className="absolute top-0 right-0 w-16 h-16 bg-indigo-500/[0.03] blur-xl rounded-full -mr-8 -mt-8" />
@@ -1229,530 +1453,10 @@ export const CalendarPage = () => {
                  )}
               </div>
            </div>
-
-           <div className="bg-[#121214] border border-white/5 rounded-2xl p-5 shadow-lg group">
-              <div className="flex items-center gap-3 mb-4">
-                 <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/20 group-hover:scale-110 transition-transform">
-                    <Video className="w-4 h-4 text-white" />
-                 </div>
-                 <div className="space-y-0.5">
-                    <div className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">OPERATIONAL LOAD</div>
-                    <div className="text-[10px] font-bold text-white uppercase tracking-tight">System Status</div>
-                 </div>
-              </div>
-              <div className="flex gap-2 items-center">
-                 <div className="flex-1 h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
-                    <motion.div 
-                       initial={{ width: 0 }}
-                       animate={{ width: '65%' }}
-                       className="h-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]" 
-                    />
-                 </div>
-                 <div className="text-[9px] font-mono text-indigo-400 font-bold">65%</div>
-              </div>
-           </div>
-
-           {driveStorage && (
-             <div className="bg-[#121214] border border-white/5 rounded-2xl p-5 shadow-lg group">
-                <div className="flex items-center gap-3 mb-4">
-                   <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-600/20 group-hover:scale-110 transition-transform">
-                      <UploadCloud className="w-4 h-4 text-white" />
-                   </div>
-                   <div className="space-y-0.5">
-                      <div className="text-[8px] font-black text-emerald-400 uppercase tracking-widest">DRIVE STORAGE</div>
-                      <div className="text-[10px] font-bold text-white uppercase tracking-tight">Account Quota</div>
-                   </div>
-                </div>
-                <div className="space-y-2">
-                   <div className="flex justify-between items-end">
-                      <div className="text-[11px] text-white/40 font-mono">
-                         {formatStorage(driveStorage.used)} / {formatStorage(driveStorage.total)}
-                      </div>
-                      <div className="text-[10px] font-black text-emerald-400">
-                         {Math.round((driveStorage.used / driveStorage.total) * 100)}%
-                      </div>
-                   </div>
-                   <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
-                      <motion.div 
-                         initial={{ width: 0 }}
-                         animate={{ width: `${(driveStorage.used / driveStorage.total) * 100}%` }}
-                         className="h-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" 
-                      />
-                   </div>
-                </div>
-             </div>
-           )}
         </div>
       </div>
 
-      <AnimatePresence>
-        {selectedEvent && (
-           <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 md:p-8 md:pl-72 overflow-hidden">
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-            onClick={() => setSelectedEventId(null)}
-          />
-          
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.98, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: 10 }}
-            className="relative w-full max-w-6xl h-full max-h-[92vh] bg-[#0A0A0B] border border-white/5 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-          >
-             <div className="px-8 py-5 bg-[#0D0D0E]/90 border-b border-white/5 relative shrink-0">
-                <div className="flex flex-col gap-4">
-                   <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                         <div className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).bg} ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).text} border ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).border}`}>
-                            {selectedEvent.isArchived ? 'ARCHIVED' : getStatusConfig(selectedEvent.status).label}
-                         </div>
-                         <div className="px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest bg-white/5 text-white/60 border border-white/5 flex items-center gap-2">
-                            <span className="text-white/30 shrink-0">SHOOTER:</span>
-                            <select 
-                              value={selectedEvent.shooter || ''}
-                              onChange={(e) => handleUpdateOrder(selectedEvent.id, { shooter: e.target.value })}
-                              className="bg-transparent border-none text-white focus:outline-none cursor-pointer p-0 text-[9px] font-black uppercase"
-                            >
-                               <option value="" className="bg-[#0D0D0E]">N/A</option>
-                               <option value="Kyle" className="bg-[#0D0D0E]">Kyle</option>
-                               <option value="Jack" className="bg-[#0D0D0E]">Jack</option>
-                            </select>
-                         </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                         <a 
-                            href={`https://fotello.com/orders/${selectedEvent.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="Open in Fotello"
-                            className="p-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-lg hover:bg-amber-500/20 transition-all"
-                         >
-                            <ExternalLink className="w-4 h-4" />
-                         </a>
-                         <button 
-                            onClick={() => handleUpdateOrder(selectedEvent.id, { isArchived: !selectedEvent.isArchived })}
-                            title={selectedEvent.isArchived ? "Unarchive Order" : "Archive Order"}
-                            className={`p-1.5 border rounded-lg transition-all ${selectedEvent.isArchived ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400' : 'bg-white/5 border-white/10 text-white/40 hover:text-white'}`}
-                         >
-                            <Archive className="w-4 h-4" />
-                         </button>
-                         <div className="w-[1px] h-4 bg-white/10 mx-1" />
-                         <button onClick={() => setSelectedEventId(null)} className="p-1.5 text-white/40 hover:text-white">
-                            <Plus className="w-5 h-5 rotate-45" />
-                         </button>
-                      </div>
-                   </div>
-                   
-                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="flex items-center gap-5">
-                         <h2 className="text-2xl font-black text-white uppercase tracking-tighter leading-tight">
-                            {selectedEvent.location || selectedEvent.title}
-                         </h2>
-                      </div>
-                      <div className="flex items-center gap-4 text-[10px] font-mono text-white/40">
-                         <Clock className="w-3 h-3" />
-                         {format(parseISO(selectedEvent.date), 'MMM do, yyyy @ HH:mm')}
-                      </div>
-                   </div>
-                </div>
-             </div>
-
-             <div className="flex-1 overflow-y-auto custom-scrollbar p-8 bg-[#080809]">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                   <div className="space-y-6">
-                      {/* RAW Upload Section */}
-                      <div className="bg-[#121214] border border-white/5 rounded-xl p-5 space-y-4">
-                         <div className="flex items-center justify-between">
-                            <h3 className="text-[9px] font-black uppercase text-indigo-400 tracking-[0.3em] flex items-center gap-2">
-                               RAW Upload
-                               {isCreatingTemplate && <Loader2 className="w-2.5 h-2.5 animate-spin"/>}
-                            </h3>
-                            {rootFolder && (
-                               <div className="flex items-center gap-2">
-                                  {selectedEvent.driveFolderId && (
-                                     <button 
-                                       disabled={isCreatingTemplate}
-                                       onClick={() => handleResetLinks(selectedEvent)}
-                                       className="px-2 py-1 bg-white/5 hover:bg-red-500/10 text-white/20 hover:text-red-400 rounded text-[8px] uppercase font-bold transition-all border border-white/5 hover:border-red-500/20 disabled:opacity-50"
-                                     >
-                                        {isCreatingTemplate ? '...' : 'Reset & Regen'}
-                                     </button>
-                                  )}
-                               </div>
-                            )}
-                         </div>
-
-                         <div className="space-y-4">
-                            <div className="grid grid-cols-2 gap-3">
-                               <FileDropzone 
-                                 title="Photos"
-                                 icon={Camera}
-                                 accept="image/*"
-                                 folderId={selectedEvent.rawPhotosId}
-                                 isUploading={Object.values(uploads).some((u: any) => u.status === 'uploading' && u.type === 'Photos')}
-                                 count={fileCounts[`${selectedEvent.id}-Photos`]}
-                                 onRefresh={() => selectedEvent.rawPhotosId && handleRefreshFileCount(selectedEvent.id, selectedEvent.rawPhotosId, 'Photos')}
-                                 isRefreshing={isRefreshingCounts[`${selectedEvent.id}-Photos`]}
-                                 onFilesDrop={(files) => handleFileUpload(selectedEvent, files, 'Photos')}
-                               />
-                               <FileDropzone 
-                                 title="Raw Video"
-                                 icon={Video}
-                                 accept="video/*"
-                                 folderId={selectedEvent.rawVideoId}
-                                 isUploading={Object.values(uploads).some((u: any) => u.status === 'uploading' && u.type === 'Video')}
-                                 count={fileCounts[`${selectedEvent.id}-Video`]}
-                                 onRefresh={() => selectedEvent.rawVideoId && handleRefreshFileCount(selectedEvent.id, selectedEvent.rawVideoId, 'Video')}
-                                 isRefreshing={isRefreshingCounts[`${selectedEvent.id}-Video`]}
-                                 onFilesDrop={(files) => handleFileUpload(selectedEvent, files, 'Video')}
-                               />
-                            </div>
-
-                            {/* Combined Uploads History */}
-                            {(() => {
-                               const active = Object.entries(uploads).filter(([id]) => id.startsWith(selectedEvent.id)).reverse();
-                               const historical = (selectedEvent.loadedFiles || [])
-                                 .filter((f: any) => !active.some(([id]) => id === f.driveId))
-                                 .reverse();
-                               
-                               const totalLength = active.length + historical.length;
-                               if (totalLength === 0) return null;
-
-                               const isExpanded = isUploadHistoryExpanded[selectedEvent.id] ?? true;
-                               const pendingCount = active.filter(([id, u]: [string, any]) => u.status === 'pending' || u.status === 'uploading').length;
-                               const completedCount = active.length - pendingCount;
-                               
-                               let etaStr = '';
-                               if (pendingCount > 0) {
-                                  // Simplified ETA calculation based on first currently uploading item if any
-                                  const uploadingItem = active.find(([id, u]: [string, any]) => u.status === 'uploading');
-                                  if (uploadingItem) {
-                                     const [_, u] = uploadingItem as [string, any];
-                                     if (u.progress > 0 && u.startTime) {
-                                        const elapsedMs = Date.now() - u.startTime;
-                                        const totalEstMs = (elapsedMs / u.progress) * 100;
-                                        const remainingMs = totalEstMs - elapsedMs;
-                                        // Very rough estimate multiplying by pending tasks
-                                        const totalRemainingSeconds = Math.max(0, Math.round((remainingMs * pendingCount) / 1000));
-                                        
-                                        if (totalRemainingSeconds < 60) {
-                                           etaStr = `${totalRemainingSeconds}s left`;
-                                        } else {
-                                           etaStr = `${Math.ceil(totalRemainingSeconds / 60)}m left`;
-                                        }
-                                     } else {
-                                        etaStr = `calculating...`;
-                                     }
-                                  } else {
-                                     etaStr = `queued...`;
-                                  }
-                               }
-
-                               return (
-                                  <div className="space-y-0 bg-white/5 rounded-lg border border-white/5 overflow-hidden">
-                                     <button 
-                                       onClick={() => setIsUploadHistoryExpanded(prev => ({ ...prev, [selectedEvent.id]: !isExpanded }))}
-                                       className="w-full flex items-center justify-between p-3 hover:bg-white/5 transition-colors"
-                                     >
-                                        <div className="text-[8px] font-black uppercase text-white/30 tracking-widest flex items-center gap-2">
-                                           Upload History
-                                           <span className="bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded-full text-[7px] leading-none">{totalLength}</span>
-                                           {pendingCount > 0 && (
-                                             <span className="text-white/40 text-[8px] font-mono lowercase">({completedCount}/{active.length})</span>
-                                           )}
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                           {pendingCount > 0 && (
-                                              <span className="text-[8px] text-white/30 font-mono">{etaStr}</span>
-                                           )}
-                                           <ChevronLeft className={`w-3 h-3 text-white/20 transition-transform ${isExpanded ? '-rotate-90' : ''}`} />
-                                        </div>
-                                     </button>
-
-                                     <AnimatePresence>
-                                        {isExpanded && (
-                                           <motion.div 
-                                             initial={{ height: 0, opacity: 0 }}
-                                             animate={{ height: 'auto', opacity: 1 }}
-                                             exit={{ height: 0, opacity: 0 }}
-                                             className="overflow-hidden"
-                                           >
-                                              <div className="p-3 pt-0 space-y-2 max-h-[250px] overflow-y-auto custom-scrollbar">
-                                                 {active.map(([id, u]: [string, any]) => (
-                                                    <div key={id} className={`space-y-2 p-2.5 rounded-lg border ${u.status === 'pending' ? 'bg-white/[0.01] border-transparent opacity-50' : 'bg-white/[0.02] border-white/5'}`}>
-                                                       <div className="flex justify-between items-center text-[9px]">
-                                                          <div className="flex items-center gap-2 truncate max-w-[150px]">
-                                                             {u.status === 'completed' ? (
-                                                               <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                                                             ) : u.status === 'error' ? (
-                                                               <AlertCircle className="w-3 h-3 text-red-400" />
-                                                             ) : u.status === 'pending' ? (
-                                                               <Clock className="w-3 h-3 text-white/20" />
-                                                             ) : (
-                                                               <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
-                                                             )}
-                                                             <span className="text-white/60 truncate font-medium">{u.name}</span>
-                                                          </div>
-                                                          <span className="text-white/40 font-mono">{u.status === 'pending' ? 'Pending' : `${Math.round(u.progress)}%`}</span>
-                                                       </div>
-                                                       {u.status !== 'pending' && (
-                                                          <div className="w-full h-1.5 bg-black/40 rounded-full overflow-hidden">
-                                                             <motion.div 
-                                                               initial={{ width: 0 }}
-                                                               animate={{ width: `${Math.max(u.progress, 2)}%` }}
-                                                               transition={{ duration: 0.2 }}
-                                                               className={`h-full ${u.status === 'completed' ? 'bg-emerald-500' : u.status === 'error' ? 'bg-red-500' : 'bg-indigo-500'}`}
-                                                             />
-                                                          </div>
-                                                       )}
-                                                    </div>
-                                                 ))}
-                                                 
-                                                 {historical.map((file: any, i: number) => (
-                                                    <div key={`hist-${i}`} className="flex items-center justify-between p-2.5 bg-white/[0.01] rounded-lg border border-white/5 text-[9px]">
-                                                       <div className="flex items-center gap-2">
-                                                          {file.type === 'Photos' ? <Camera className="w-3 h-3 text-indigo-400" /> : <Video className="w-3 h-3 text-pink-400" />}
-                                                          <span className="text-white/60 truncate max-w-[140px] font-medium">{file.name}</span>
-                                                       </div>
-                                                       <div className="flex items-center gap-2">
-                                                          <CheckCircle2 className="w-3 h-3 text-emerald-400/50" />
-                                                          <span className="text-white/20 font-mono text-[8px]">{format(new Date(file.uploadedAt), 'HH:mm')}</span>
-                                                       </div>
-                                                    </div>
-                                                 ))}
-                                              </div>
-                                           </motion.div>
-                                        )}
-                                     </AnimatePresence>
-                                  </div>
-                               );
-                            })()}
-
-                            {selectedEvent.driveFolderId && (
-                               <div className="grid grid-cols-2 gap-3 pt-2">
-                                  <a 
-                                    href={selectedEvent.rawLinks} 
-                                    target="_blank" 
-                                    rel="noreferrer"
-                                    className="flex items-center justify-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl border border-white/5 transition-all group"
-                                  >
-                                     <Folder className="w-4 h-4 text-white/40 group-hover:text-white transition-colors" />
-                                     <div className="text-left">
-                                        <div className="text-[10px] font-black uppercase text-white/60">Raw Folder</div>
-                                        <div className="text-[8px] text-white/20 uppercase font-bold">Open in Drive</div>
-                                     </div>
-                                  </a>
-                                  <a 
-                                    href={selectedEvent.deliverLinks} 
-                                    target="_blank" 
-                                    rel="noreferrer"
-                                    className="flex items-center justify-center gap-2 p-3 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-xl border border-indigo-500/20 transition-all group"
-                                  >
-                                     <Cloud className="w-4 h-4 text-indigo-400" />
-                                     <div className="text-left">
-                                        <div className="text-[10px] font-black uppercase text-indigo-400">Deliver Folder</div>
-                                        <div className="text-[8px] text-indigo-400/40 uppercase font-bold">Open in Drive</div>
-                                     </div>
-                                  </a>
-                               </div>
-                            )}
-                         </div>
-
-                      </div>
-
-                      <div className="bg-[#121214] border border-white/5 rounded-xl p-5">
-                         <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4">Production Info</h3>
-                         <div className="space-y-4">
-                            <div className="space-y-1">
-                               <label className="text-[8px] uppercase font-bold text-white/30">Status</label>
-                               <select 
-                                  value={selectedEvent.status || 'Draft'}
-                                  onChange={(e) => handleUpdateOrder(selectedEvent.id, { status: e.target.value })}
-                                  className="w-full bg-black/40 border border-white/10 rounded px-2 py-1.5 text-[11px] text-white"
-                               >
-                                  <option value="Draft">Draft</option>
-                                  <option value="Confirmed">Confirmed</option>
-                                  <option value="Editing">Editing</option>
-                                  <option value="Completed">Completed</option>
-                               </select>
-                            </div>
-                            <div className="space-y-1">
-                               <label className="text-[8px] uppercase font-bold text-white/30">Notes</label>
-                               <textarea 
-                                  value={selectedEvent.notes || ''}
-                                  onChange={(e) => handleUpdateOrder(selectedEvent.id, { notes: e.target.value })}
-                                  placeholder="Technical instructions..."
-                                  className="w-full h-24 bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white resize-none"
-                               />
-                            </div>
-                         </div>
-                      </div>
-
-                      {/* Client & Order Detail Section */}
-                      {/* Workflow Actions Section */}
-                      <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-xl p-5 space-y-4">
-                         <h3 className="text-[9px] font-black uppercase text-indigo-400 tracking-[0.3em]">Workflow Actions</h3>
-                         <div className="space-y-4">
-                            <button 
-                              onClick={() => navigate(`/submit-to-editor/${selectedEvent.id}`)}
-                              className="w-full flex items-center justify-between p-4 bg-indigo-600 hover:bg-brand text-white rounded-xl transition-all group shadow-lg shadow-indigo-600/10"
-                            >
-                               <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center group-hover:scale-110 transition-transform">
-                                     <Upload className="w-4 h-4" />
-                                  </div>
-                                  <div className="text-left">
-                                     <div className="text-[10px] font-black uppercase tracking-widest leading-none mb-1">Submit to Editor</div>
-                                     <div className="text-[8px] text-white/50 uppercase font-mono">Upload raw footage & instructions</div>
-                                  </div>
-                               </div>
-                               <ChevronRight className="w-4 h-4 text-white/40 group-hover:translate-x-1 transition-transform" />
-                            </button>
-
-                            {(selectedEvent.status === 'Editing' || selectedEvent.status === 'Post-Production' || selectedEvent.status === 'Completed') && (
-                               <button 
-                                 onClick={() => navigate(`/video-library`)}
-                                 className="w-full flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 text-white border border-white/5 rounded-xl transition-all group"
-                               >
-                                  <div className="flex items-center gap-3">
-                                     <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
-                                        <Play className="w-4 h-4 text-indigo-400" />
-                                     </div>
-                                     <div className="text-left">
-                                        <div className="text-[10px] font-black uppercase tracking-widest leading-none mb-1">Review Production</div>
-                                        <div className="text-[8px] text-white/40 uppercase font-mono">Access Video Matrix</div>
-                                     </div>
-                                  </div>
-                                  <ChevronRight className="w-4 h-4 text-white/20 group-hover:translate-x-1 transition-transform" />
-                               </button>
-                            )}
-                         </div>
-                      </div>
-                   </div>
-
-                   <div className="space-y-6">
-                      <div className="bg-[#121214] border border-white/5 rounded-xl p-5 space-y-6">
-                         <div>
-                            <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4">Client Contact</h3>
-                            <div className="grid grid-cols-2 gap-4">
-                               <div className="space-y-1">
-                                  <label className="text-[8px] uppercase font-bold text-white/20">Name</label>
-                                  <input 
-                                    type="text"
-                                    value={selectedEvent.clientName || ''}
-                                    onChange={(e) => handleUpdateOrder(selectedEvent.id, { clientName: e.target.value })}
-                                    placeholder="Enter client name..."
-                                    className="w-full text-[11px] text-white font-medium bg-white/5 px-3 py-2 rounded border border-white/5 focus:outline-none focus:border-indigo-500/30 transition-all"
-                                  />
-                               </div>
-                               <div className="space-y-1">
-                                  <label className="text-[8px] uppercase font-bold text-white/20">Email</label>
-                                  <div className="text-[11px] text-white/60 bg-white/5 px-3 py-2 rounded border border-white/5 truncate">{selectedEvent.clientEmail || 'N/A'}</div>
-                               </div>
-                            </div>
-                         </div>
-
-                         {(() => {
-                            const parsed = parseDescriptionSections(selectedEvent.description || '');
-                            if (parsed.items.length === 0 && parsed.intake.length === 0) return null;
-                            
-                            return (
-                               <div className="space-y-6 pt-4 border-t border-white/5">
-                                  {parsed.items.length > 0 && (
-                                     <div>
-                                        <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-3">Order Items</h3>
-                                        <div className="space-y-1.5">
-                                           {parsed.items.map((item: string, i: number) => (
-                                              <div key={i} className="flex items-center gap-2 text-[10px] text-white/70 bg-white/[0.02] p-2 rounded border border-white/5">
-                                                 <div className="w-1 h-1 rounded-full bg-indigo-500" />
-                                                 {item}
-                                              </div>
-                                           ))}
-                                        </div>
-                                     </div>
-                                  )}
-                                  
-                                  {parsed.intake.length > 0 && (
-                                     <div>
-                                        <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-3">Intake Answers</h3>
-                                        <div className="space-y-3">
-                                           {parsed.intake.map((pair: any, i: number) => (
-                                              <div key={i} className="space-y-1 bg-white/[0.02] p-3 rounded border border-white/5">
-                                                 <div className="text-[8px] uppercase font-bold text-indigo-400/60">{pair.q}</div>
-                                                 <div className="text-[10px] text-white/80 leading-relaxed italic">"{pair.a}"</div>
-                                              </div>
-                                           ))}
-                                        </div>
-                                     </div>
-                                  )}
-                               </div>
-                            );
-                         })()}
-                      </div>
-
-                      <div className="bg-[#121214] border border-white/5 rounded-xl p-5">
-                         <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4">Actions</h3>
-                         <div className="space-y-3">
-                            <p className="text-[9px] font-mono text-white/20 uppercase tracking-widest text-center py-4 italic border border-dashed border-white/5 rounded-lg">
-                               No auxiliary actions required for this protocol
-                            </p>
-                         </div>
-                      </div>
-
-                      {/* Map or Location Section */}
-                      <div className="bg-[#121214] border border-white/5 rounded-xl p-5">
-                         <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4">Location</h3>
-                         <div className="space-y-3">
-                            <div className="p-4 bg-black/40 rounded border border-white/5 text-[11px] text-white leading-relaxed">
-                               {selectedEvent.location || 'No location specified'}
-                            </div>
-                            {selectedEvent.location && (
-                               <a 
-                                 href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedEvent.location)}`}
-                                 target="_blank"
-                                 rel="noreferrer"
-                                 className="flex items-center justify-center gap-2 w-full py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded text-[9px] font-black uppercase tracking-widest transition-all"
-                               >
-                                  <ExternalLink className="w-3 h-3" />
-                                  Open in Maps
-                               </a>
-                            )}
-                         </div>
-                      </div>
-                   </div>
-                </div>
-             </div>
-          </motion.div>
-        </div>
-      )}
-      </AnimatePresence>
       
-      {showProjectSelect && (
-        <>
-          <div className="fixed inset-0 z-[3000]" onClick={() => setShowProjectSelect(null)} />
-          <div 
-            className="fixed z-[3001] bg-[#1A1A1C] border border-white/10 rounded-lg shadow-2xl p-4 w-64 flex flex-col gap-3"
-            style={{ top: showProjectSelect.y, left: showProjectSelect.x }}
-          >
-             <h3 className="text-xs font-bold text-white uppercase tracking-widest">Link Project</h3>
-             <div className="flex flex-col gap-2 max-h-40 overflow-y-auto">
-                {projects.map(p => (
-                   <button
-                     key={p.id}
-                     onClick={() => handleCreateVideoFromEvent(selectedEvent, p.id)}
-                     className="px-3 py-2 text-xs text-left bg-black hover:bg-indigo-500/20 rounded text-white/70"
-                   >
-                     {p.name || 'Untitled'}
-                   </button>
-                ))}
-             </div>
-          </div>
-        </>
-      )}
 
       {showAddEventModal && (
         <div className="fixed inset-0 z-[3000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">

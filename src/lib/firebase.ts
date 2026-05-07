@@ -9,6 +9,9 @@ export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const storage = getStorage(app);
 
+const secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
+export const secondaryAuth = getAuth(secondaryApp);
+
 // Test connection on boot
 const testConnection = async () => {
     try {
@@ -22,29 +25,9 @@ const testConnection = async () => {
 testConnection();
 
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly');
-googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
-googleProvider.addScope('https://www.googleapis.com/auth/calendar.readonly');
 
 export const signInWithGoogle = async () => {
   const result = await signInWithPopup(auth, googleProvider);
-  const credential = GoogleAuthProvider.credentialFromResult(result);
-  if (credential?.accessToken) {
-    localStorage.setItem('google_drive_token', credential.accessToken);
-    localStorage.setItem('google_calendar_token', credential.accessToken);
-    localStorage.setItem('google_drive_email', result.user.email || '');
-    localStorage.setItem('google_calendar_email', result.user.email || '');
-    try {
-      await setDoc(doc(db, 'users', result.user.uid, 'settings', 'integrations'), {
-        google_drive_token: credential.accessToken,
-        google_drive_email: result.user.email,
-        google_calendar_token: credential.accessToken,
-        google_calendar_email: result.user.email
-      }, { merge: true });
-    } catch(e) {
-      console.error(e);
-    }
-  }
   return result;
 };
 export const signOut = () => fbSignOut(auth);

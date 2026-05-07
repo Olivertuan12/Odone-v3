@@ -2,26 +2,34 @@ import React from 'react';
 import { useAuth } from '@/src/lib/AuthContext';
 import { Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Video, Book } from 'lucide-react';
+import { Video, Book, Loader2 } from 'lucide-react';
 
 export const Login = () => {
   const { user, signIn, loading } = useAuth();
   const [error, setError] = React.useState<string | null>(null);
   
+  const [isAuthenticating, setIsAuthenticating] = React.useState(false);
+  
   if (loading) return <div className="h-screen w-full flex items-center justify-center">Loading...</div>;
-  if (user) return <Navigate to="/dashboard" />;
+  if (user) return <Navigate to="/calendar" />;
 
   const handleLogin = async () => {
+    if (isAuthenticating) return;
     setError(null);
+    setIsAuthenticating(true);
     try {
       await signIn();
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/unauthorized-domain') {
+      if (err.code === 'auth/cancelled-popup-request') {
+        // Ignore this error as it means another popup was opened or current one was cancelled
+      } else if (err.code === 'auth/unauthorized-domain') {
         setError(`Unauthorized Domain: Please add "${window.location.hostname}" to your Authorized Domains list in the Firebase Console (Authentication > Settings > Authorized domains).`);
       } else {
         setError(err.message || 'Login failed. Please check your connection.');
       }
+    } finally {
+      setIsAuthenticating(false);
     }
   };
 
@@ -73,10 +81,15 @@ export const Login = () => {
         
         <button
           onClick={handleLogin}
-          className="w-full bg-surface-3 hover:bg-surface-4 text-foreground font-bold py-2.5 px-4 rounded-md text-[10px] tracking-widest transition-all flex items-center justify-center gap-3 uppercase border border-border shadow-sm group"
+          disabled={isAuthenticating}
+          className="w-full bg-surface-3 hover:bg-surface-4 disabled:opacity-50 text-foreground font-bold py-2.5 px-4 rounded-md text-[10px] tracking-widest transition-all flex items-center justify-center gap-3 uppercase border border-border shadow-sm group"
         >
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4" />
-          <span>Login with Google</span>
+          {isAuthenticating ? (
+            <Loader2 className="w-4 h-4 animate-spin text-brand" />
+          ) : (
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4" />
+          )}
+          <span>{isAuthenticating ? 'Authenticating...' : 'Login with Google'}</span>
         </button>
       </motion.div>
     </div>

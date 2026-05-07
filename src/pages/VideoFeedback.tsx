@@ -139,7 +139,10 @@ export function VideoFeedback() {
         </div>
         <div className="flex items-center gap-4">
            <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border ${
-             submission?.status === 'Completed' ? 'text-emerald-400 border-emerald-500/20' : 'text-amber-400 border-amber-500/20'
+             submission?.status === 'Completed' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 
+             submission?.status === 'Client Review' ? 'text-fuchsia-400 border-fuchsia-500/20 bg-fuchsia-500/5' :
+             submission?.status === 'In Progress' ? 'text-indigo-400 border-indigo-500/20 bg-indigo-500/5' :
+             'text-amber-400 border-amber-500/20 bg-amber-500/5'
            }`}>
              {submission?.status}
            </div>

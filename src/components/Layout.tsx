@@ -5,7 +5,7 @@ import { LogOut, Home, Folder, Video, Book, Calendar, CheckSquare, Settings, Use
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 
 export const Layout = () => {
-  const { user, logOut } = useAuth();
+  const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -43,8 +43,8 @@ export const Layout = () => {
   }, [navigate]);
 
   const [navItems, setNavItems] = useState([
-    { id: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: Home, color: 'text-brand' },
     { id: 'calendar', label: 'Calendar', path: '/calendar', icon: Calendar, color: 'text-[#34d399]' },
+    { id: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: Home, color: 'text-brand' },
     { id: 'video-library', label: 'Video Manage', path: '/video-library', icon: Video, color: 'text-amber-400' },
     { id: 'clients', label: 'Clients', path: '/clients', icon: Users, color: 'text-[#60a5fa]' },
     { id: 'revenue', label: 'Revenue', path: '/revenue', icon: Folder, color: 'text-[#f472b6]' },
@@ -120,7 +120,17 @@ export const Layout = () => {
                    <p className="text-[11px] font-black truncate text-foreground uppercase tracking-wider">{user?.displayName || 'User'}</p>
                    <p className="text-[9px] text-muted-foreground uppercase font-mono truncate">{user?.email || 'admin@re.media'}</p>
                  </div>
-                 <button onClick={() => logOut().then(() => navigate('/'))} className="text-muted-foreground hover:text-destructive p-2 rounded-lg transition-colors hover:bg-surface-3">
+                 <button 
+                   onClick={async () => {
+                     try {
+                       await signOut();
+                     } catch(e) {
+                       console.error(e);
+                       alert("Logout error: " + (e as Error).message);
+                     }
+                   }} 
+                   className="text-muted-foreground hover:text-destructive p-2 rounded-lg transition-colors hover:bg-surface-3 cursor-pointer"
+                 >
                     <LogOut className="w-3.5 h-3.5" />
                  </button>
                </div>

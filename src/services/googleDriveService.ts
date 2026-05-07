@@ -14,7 +14,14 @@ export const googleDriveService = {
         headers: { Authorization: `Bearer ${token}` }
       }
     );
-    if (!response.ok) throw new Error('Failed to list folders');
+      if (!response.ok) {
+        let msg = '';
+        try { msg = await response.text(); } catch(e){}
+        if (response.status === 401) {
+          throw new Error('401 Unauthorized: Drive token expired');
+        }
+        throw new Error(`Failed to list folders (Status: ${response.status}): ${msg}`);
+      }
     const data = await response.json();
     return data.files || [];
   },
@@ -49,7 +56,11 @@ export const googleDriveService = {
         parents: [parentId]
       })
     });
-    if (!response.ok) throw new Error('Failed to create folder');
+    if (!response.ok) {
+       let msg = '';
+       try { msg = await response.text(); } catch(e){}
+       throw new Error(`Failed to create folder (Status: ${response.status}): ${msg}`);
+    }
     const data = await response.json();
     return data.id;
   },
@@ -82,36 +93,60 @@ export const googleDriveService = {
       parents: [parentId]
     };
 
-    const form = new FormData();
-    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', file);
+    const initRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Upload-Content-Type': file.type || 'application/octet-stream',
+        'X-Upload-Content-Length': file.size.toString()
+      },
+      body: JSON.stringify(metadata)
+    });
+
+    if (!initRes.ok) {
+       let msg = '';
+       try { msg = await initRes.text(); } catch(e){}
+       if (initRes.status === 401) {
+         throw new Error('401 Unauthorized: Drive token expired');
+       }
+       throw new Error(`Failed to initialize upload (Status: ${initRes.status}): ${msg}`);
+    }
+
+    const uploadUrl = initRes.headers.get('Location');
+    if (!uploadUrl) {
+       throw new Error('No resumable upload URL returned from API');
+    }
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart');
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-      
-      xhr.responseType = 'json';
+      xhr.open('PUT', uploadUrl);
       
       if (onProgress) {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
             const percent = (e.loaded / e.total) * 100;
-            onProgress(percent);
+            onProgress(Math.min(percent, 99.9));
           }
         };
       }
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(xhr.response.id);
+          let responseId = '';
+          try {
+            const response = JSON.parse(xhr.responseText);
+            responseId = response.id;
+          } catch(e) {}
+          if (onProgress) onProgress(100);
+          resolve(responseId);
         } else {
           reject(new Error(`Upload failed with status ${xhr.status}`));
         }
       };
 
       xhr.onerror = () => reject(new Error('Network error during upload'));
-      xhr.send(form);
+      xhr.send(file);
     });
   },
 
@@ -133,7 +168,7 @@ export const googleDriveService = {
     finalVideoId: string
   }> {
     const shooterName = event.shooter || 'Unassigned';
-    const eventDate = event.date.split('T')[0]; // Format YYYY-MM-DD
+    const eventDate = typeof event.date === 'string' ? event.date.split('T')[0] : 'Unknown_Date';
     const clientName = event.clientName || 'Unknown_Client';
     const eventBaseName = event.location || event.title || 'Untitled_Event';
     

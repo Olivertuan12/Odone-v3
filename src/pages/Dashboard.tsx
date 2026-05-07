@@ -12,17 +12,20 @@ import {
   Zap,
   FolderOpen,
   PieChart,
-  HardDrive
+  HardDrive,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { collection, query, getDocs, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
 import { useAuth } from '../lib/AuthContext';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 
 export function Dashboard() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [stats, setStats] = useState({ 
     activeProjects: 0, 
     totalClients: 0, 
@@ -34,6 +37,14 @@ export function Dashboard() {
   const [upcomingShoots, setUpcomingShoots] = useState<any[]>([]);
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showOtherEvents, setShowOtherEvents] = useState(false);
+
+  const isOrder = (event: any) => {
+    if (event.isOrder !== undefined) return event.isOrder;
+    // Fallback logic for items not yet marked with the isOrder flag
+    const hasOrderKeywords = event.title?.match(/shoot|order|property|photos?|video/i);
+    return !!event.location && (!!event.packageName || !!hasOrderKeywords);
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -256,7 +267,10 @@ export function Dashboard() {
                              <h4 className="text-[11px] font-black text-white uppercase tracking-tight group-hover:text-amber-400 transition-colors">{sub.eventTitle}</h4>
                              <div className="flex items-center gap-3 mt-1">
                                 <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${
-                                  sub.status === 'Completed' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 'text-amber-400 border-amber-500/20 bg-amber-500/5'
+                                  sub.status === 'Completed' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 
+                                  sub.status === 'Client Review' ? 'text-fuchsia-400 border-fuchsia-500/20 bg-fuchsia-500/5' :
+                                  sub.status === 'In Progress' ? 'text-indigo-400 border-indigo-500/20 bg-indigo-500/5' :
+                                  'text-amber-400 border-amber-500/20 bg-amber-500/5'
                                 }`}>
                                    {sub.status}
                                 </span>
@@ -278,9 +292,20 @@ export function Dashboard() {
 
           {/* Sidebar: Upcoming Shoots */}
           <div className="space-y-4">
-            <div className="flex items-center gap-2 px-2">
-               <h2 className="text-xs font-black uppercase tracking-widest text-white">Temporal Log</h2>
-               <div className="w-8 h-[1px] bg-white/10" />
+            <div className="flex items-center justify-between px-2">
+               <div className="flex items-center gap-2">
+                  <h2 className="text-xs font-black uppercase tracking-widest text-white">Today's Agenda</h2>
+                  <div className="w-8 h-[1px] bg-white/10" />
+               </div>
+               <button 
+                  onClick={() => setShowOtherEvents(!showOtherEvents)}
+                  className={`flex items-center gap-2 px-2 py-1 rounded-lg text-[9px] font-black uppercase transition-all border ${
+                    showOtherEvents ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-white/5 text-white/30 border-white/5 hover:text-white/50'
+                  }`}
+               >
+                  {showOtherEvents ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  {showOtherEvents ? 'Hide Others' : 'Show Others'}
+               </button>
             </div>
 
             <div className="bg-[#121214] border border-white/5 rounded-2xl p-1 overflow-hidden shadow-2xl">
@@ -293,24 +318,57 @@ export function Dashboard() {
                </div>
                
                <div className="divide-y divide-white/5">
-                  {upcomingShoots.map((event, i) => (
-                    <div key={event.id} className="p-4 hover:bg-white/[0.02] transition-colors group cursor-pointer">
-                       <div className="flex justify-between items-start mb-2">
-                          <span className="text-[9px] font-mono text-indigo-400/60 uppercase group-hover:text-indigo-400 transition-colors">
-                             {event.date ? format(new Date(event.date), 'MMM dd') : '-- --'}
-                          </span>
-                          <ExternalLink className="w-3 h-3 text-white/10 group-hover:text-white/40 transition-colors" />
-                       </div>
-                       <h4 className="text-[10px] font-black text-white/80 uppercase tracking-tight truncate group-hover:text-white transition-colors">
-                          {event.location || event.title}
-                       </h4>
-                       <div className="flex items-center gap-2 mt-2">
-                          <div className={`w-1 h-1 rounded-full ${i % 2 === 0 ? 'bg-cyan-400 shadow-[0_0_4px_rgba(34,211,238,0.5)]' : 'bg-fuchsia-400 shadow-[0_0_4px_rgba(232,121,249,0.5)]'}`} />
-                          <span className="text-[8px] font-black text-white/20 uppercase tracking-widest">{event.clientName || 'Private Node'}</span>
-                       </div>
-                    </div>
-                  ))}
-                  {upcomingShoots.length === 0 && (
+                  {upcomingShoots
+                    .filter(event => showOtherEvents || isOrder(event))
+                    .map((event, i) => {
+                      const orderStatus = isOrder(event);
+                      return (
+                        <div 
+                          key={event.id} 
+                          className={`p-4 hover:bg-white/[0.02] transition-colors group cursor-pointer ${!orderStatus ? 'opacity-40 grayscale-[0.5]' : ''}`} 
+                          onClick={() => navigate(`/order/${event.id}`)}
+                        >
+                           <div className="flex justify-between items-start mb-2">
+                              <span className={`text-[9px] font-mono uppercase transition-colors ${!orderStatus ? 'text-white/20' : 'text-indigo-400/60 group-hover:text-indigo-400'}`}>
+                                 {event.date ? format(new Date(event.date), 'MMM dd') : '-- --'}
+                              </span>
+                              <ExternalLink className="w-3 h-3 text-white/10 group-hover:text-white/40 transition-colors" />
+                           </div>
+                           <h4 className={`text-[10px] font-black uppercase tracking-tight truncate transition-colors ${!orderStatus ? 'text-white/30' : 'text-white/80 group-hover:text-white'}`}>
+                              {event.location || event.title}
+                           </h4>
+                           <div className="flex items-center justify-between mt-2">
+                              <div className="flex items-center gap-2">
+                                 <div className={`w-1.5 h-1.5 rounded-full ${
+                                    !orderStatus ? 'bg-white/10' :
+                                    event.status === 'Delivered' ? 'bg-emerald-400' :
+                                    event.status === 'Editing' ? 'bg-amber-400' :
+                                    event.status === 'Revision' ? 'bg-orange-400' :
+                                    event.status === 'Uploaded' ? 'bg-pink-400' :
+                                    event.status === 'Order Created' || event.status === 'Scheduled' ? 'bg-sky-400' :
+                                    'bg-white/20'
+                                 } shadow-[0_0_4px_currentColor]`} />
+                                 <span className="text-[8px] font-black text-white/20 uppercase tracking-widest">
+                                    {!orderStatus ? 'Utility Event' : (event.clientName || 'Private Client')}
+                                 </span>
+                              </div>
+                              {orderStatus && (
+                                <span className={`text-[7px] font-black uppercase px-1 py-0.5 rounded border ${
+                                   event.status === 'Delivered' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' :
+                                   event.status === 'Editing' ? 'text-amber-400 border-amber-500/20 bg-amber-500/5' :
+                                   event.status === 'Revision' ? 'text-orange-400 border-orange-500/20 bg-orange-500/5' :
+                                   event.status === 'Uploaded' ? 'text-pink-400 border-pink-500/20 bg-pink-500/5' :
+                                   event.status === 'Order Created' || event.status === 'Scheduled' ? 'text-sky-400 border-sky-500/20 bg-sky-500/5' :
+                                   'text-white/20 border-white/5 bg-white/5'
+                                }`}>
+                                   {event.status || 'Waiting for Raw'}
+                                </span>
+                              )}
+                           </div>
+                        </div>
+                      );
+                    })}
+                  {upcomingShoots.filter(event => showOtherEvents || isOrder(event)).length === 0 && (
                     <div className="p-12 text-center text-[9px] font-black uppercase text-white/10 italic">
                        Queue Cleared
                     </div>
